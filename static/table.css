@@ -1,0 +1,79 @@
+/* Played cards always face their owner's seat. */
+:root{--playing-card-width:65px;--playing-card-height:96px}
+.hand .card,.played-card .card,.flying-capture{width:var(--playing-card-width);height:var(--playing-card-height);min-width:var(--playing-card-width);flex-shrink:0;box-sizing:border-box}
+/* Entrance effects move cards without changing their dimensions. */
+@keyframes card-in{from{opacity:0;translate:0 35px}to{opacity:1;translate:0 0}}
+@media(max-width:720px){:root{--playing-card-width:48px;--playing-card-height:79px}}
+.table-trump{display:flex;align-items:center;gap:14px;max-width:440px;margin:0 auto 34px;padding:12px 18px;border:2px solid #d0b271;border-radius:10px;background:#fff8df;box-shadow:0 3px 12px #193d3410;color:#193d34}
+.table-trump .trump-symbol{font:46px Georgia;line-height:1;width:47px;text-align:center;flex-shrink:0}
+.table-trump.red-trump .trump-symbol{color:#b7493e}
+.trump-caption{display:block;font-size:9px;font-weight:700;letter-spacing:1.8px;color:#776131}
+.table-trump strong{display:block;font-size:21px;line-height:1.4}
+.table-trump small{display:block;font-size:10px;color:#69745f;margin-top:2px}
+.trump-lock{margin-left:auto;padding:5px 7px;border-radius:5px;background:#ead9a9;font-size:8px;letter-spacing:1px;font-weight:700}
+.table-trump.not-set{border-color:#ced4c2;background:#ecefe4;color:#52674e}
+.not-set .trump-caption{color:#71816a}.not-set strong{font-size:16px}
+#trump.active-trump{background:#f6ebcb;border-radius:7px;padding:12px;border-top:0}
+@media(max-width:720px){.table-trump{margin:10px 0 38px;padding:10px 12px;gap:10px}.table-trump .trump-symbol{font-size:39px;width:38px}.table-trump strong{font-size:19px}.table-trump small{font-size:9px}.not-set strong{font-size:14px}.trump-lock{font-size:7px;padding:5px}}
+.center-cards.positioned-cards{inset:50% auto auto 50%;width:270px;height:280px;transform:translate(-50%,-50%);display:block;z-index:2}
+.played-card{position:absolute;display:flex;align-items:center;flex-direction:column;gap:5px;animation:card-in .3s both}
+.played-card.top{top:0;left:50%;transform:translateX(-50%)}
+.played-card.bottom{bottom:0;left:50%;transform:translateX(-50%)}
+.played-card.left{left:0;top:50%;transform:translateY(-50%)}
+.played-card.right{right:0;top:50%;transform:translateY(-50%)}
+.played-card .card:disabled{opacity:1}
+.played-card .played-by{max-width:106px;padding:3px 7px;border-radius:10px;background:#102e29ed;color:#fffbed;font:10px 'DM Sans',sans-serif;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 1px 4px #0002}
+.played-card .card.winning{box-shadow:0 0 20px #ebce7d88}
+.stack-winner{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:118px;background:#f7edcb;color:#224637;padding:7px;border-radius:8px;text-align:center;font-size:10px;font-weight:700;box-shadow:0 3px 14px #0003;z-index:2}
+.capture-announcement{position:absolute;top:51%;left:50%;transform:translate(-50%,-50%);max-width:200px;padding:8px 13px;border:1px solid #ecd28a;border-radius:9px;background:#fbf0cf;color:#214b3a;font-size:11px;font-weight:700;text-align:center;z-index:90;pointer-events:none;box-shadow:0 3px 12px #0003}
+.flying-capture{box-shadow:0 5px 15px #0004}
+#captured-piles{position:absolute;inset:0;pointer-events:none;z-index:1}
+.captured-pile{position:absolute;color:#f6f3df;text-align:center;min-width:50px;font-size:9px;pointer-events:auto}
+.captured-pile.top{top:12px;left:calc(50% + 70px)}
+.captured-pile.bottom{bottom:12px;left:calc(50% + 70px)}
+.captured-pile.left{left:10px;top:calc(50% + 60px)}
+.captured-pile.right{right:10px;top:calc(50% + 60px)}
+.pile-cards{position:relative;width:42px;height:47px;margin:0 auto 5px}
+.pile-cards i{position:absolute;width:30px;height:42px;left:2px;top:0;border:2px solid #e7e5d4;border-radius:3px;background:repeating-linear-gradient(45deg,#537c67 0 2px,#3a604e 2px 4px);box-shadow:0 2px 4px #0004;transform:rotate(-10deg)}
+.pile-cards i:nth-child(2){left:5px;top:1px;transform:rotate(-3deg)}
+.pile-cards i:nth-child(3){left:8px;top:2px;transform:rotate(5deg)}
+.pile-cards i:nth-child(4){left:11px;top:3px;transform:rotate(13deg)}
+.captured-pile>span{display:block;font-weight:700;background:#163c32de;border-radius:8px;padding:2px 5px}
+.captured-pile>small{display:block;font-size:8px;color:#cbd9bf;margin-top:3px}
+.latest-capture .pile-cards i:last-child{border-color:#e8ca7b}
+.latest-capture>small{color:#f1d38b}
+@media(max-width:720px){
+    .center-cards.positioned-cards{width:185px;height:236px}
+    .played-card{gap:3px}
+    .played-card .played-by{font-size:8px;max-width:83px;padding:2px 5px}
+    .stack-winner{width:85px;font-size:8px;padding:5px}
+    .captured-pile{font-size:8px;min-width:38px}
+    .captured-pile.top{top:7px;left:calc(50% + 55px)}
+    .captured-pile.bottom{bottom:7px;left:calc(50% + 55px)}
+    .captured-pile.left{left:5px;top:calc(50% + 54px)}
+    .captured-pile.right{right:5px;top:calc(50% + 54px)}
+    .captured-pile>small{font-size:7px}
+    .capture-announcement{font-size:9px;padding:6px 9px;max-width:150px;top:38%}
+}
+
+/* A layered deck grows with captures; every captured ten stays face-up. */
+.captured-pile .pile-cards{width:78px;height:63px;margin:0 auto 5px;filter:drop-shadow(0 4px 3px #071e2366)}
+.captured-pile .pile-cards .pile-back{width:36px;height:49px;left:calc(7px + var(--layer)*1.4px);top:calc(8px - var(--layer)*.6px);transform:rotate(calc(-9deg + var(--layer)*1.8deg));border:2px solid #ebe9d8;border-radius:4px;background:repeating-linear-gradient(45deg,#426952 0 2px,#668771 2px 3px);box-shadow:0 1px 1px #0005}
+.pile-tens{position:absolute;inset:0;perspective:400px}
+.pile-ten{position:absolute;display:block;left:calc(4px + var(--ten)*12px);top:calc(4px + var(--ten)*1px);width:36px;height:49px;border-radius:4px;border:1px solid #d2b76c;background:#fffbe8;color:#203f34;transform:rotate(calc(-8deg + var(--ten)*6deg));box-shadow:0 2px 5px #0004;font-family:Georgia,serif;animation:ten-reveal .5s ease-out both;transform-origin:center}
+.pile-ten.red{color:#b7493e}
+.pile-ten b{position:absolute;left:3px;top:3px;font-size:12px;line-height:.9;text-align:center}
+.pile-ten b small{display:block;font-size:10px;margin-top:2px}
+.pile-ten strong{position:absolute;right:5px;top:21px;font-size:20px;font-weight:400}
+.pile-ten em{position:absolute;right:3px;bottom:3px;font-size:10px;font-style:normal;transform:rotate(180deg)}
+.holds-tens>.pile-count{border:1px solid #d2b76c;background:#f6e4ac;color:#214535}
+.holds-tens>small{color:#f4d886}
+@keyframes ten-reveal{from{opacity:0;rotate:y 85deg}to{opacity:1;rotate:y 0deg}}
+@media(max-width:720px){
+    .captured-pile .pile-cards{width:60px;height:49px;margin-bottom:3px}
+    .captured-pile .pile-cards .pile-back{width:27px;height:37px;left:calc(4px + var(--layer)*1px);top:calc(7px - var(--layer)*.5px);border-width:1px;border-radius:3px}
+    .pile-ten{width:27px;height:37px;left:calc(2px + var(--ten)*10px);top:calc(3px + var(--ten)*1px);border-radius:3px}
+    .pile-ten b{font-size:10px;left:2px;top:2px}.pile-ten b small{font-size:8px}
+    .pile-ten strong{font-size:16px;top:16px;right:3px}.pile-ten em{font-size:8px;right:2px;bottom:2px}
+}
+@media(prefers-reduced-motion:reduce){.pile-ten{animation:none}}

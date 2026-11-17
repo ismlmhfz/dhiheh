@@ -1,0 +1,6 @@
+#home .queen-art{display:flex;align-items:center;justify-content:center;min-height:440px;padding-bottom:65px;isolation:isolate}
+#home .home-queen{display:block;width:auto;height:370px;max-width:100%;object-fit:contain;position:relative;z-index:1;filter:drop-shadow(0 18px 22px #11092350)}
+#home .queen-art .orbit{position:absolute;z-index:-1;left:50%;top:44%;transform:translate(-50%,-50%)}
+#home .queen-art .art-label{left:8%;right:8%;bottom:0;z-index:2;text-align:center}
+@media(min-width:1500px){#home .queen-art{min-height:490px}#home .home-queen{height:420px}}
+@media(max-width:720px){#home .queen-art{min-height:310px;padding-bottom:54px;margin-top:14px}#home .home-queen{height:260px}#home .queen-art .art-label{left:3%;right:3%}}

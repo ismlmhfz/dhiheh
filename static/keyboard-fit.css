@@ -1,0 +1,18 @@
+@media(max-width:720px){
+ html:has(body.in-room){height:100%;overflow:hidden}
+ body.in-room{position:fixed;top:var(--game-top,0px);left:0;right:0;width:100%;margin:0;height:var(--game-height,100dvh)}
+ /* Keep chat within the visual viewport, including Safari keyboard panning. */
+ .in-room #room-chat,.in-room #quick-message-dialog,.in-room #team-name-dialog{
+  position:fixed;top:auto;bottom:calc(100% - var(--game-top,0px) - var(--game-height,100dvh) + 8px);left:8px;right:8px;margin:0;width:calc(100% - 16px);max-width:none;max-height:calc(var(--game-height,100dvh) - 16px);box-sizing:border-box;border-radius:18px;padding:14px;
+ }
+ .in-room #room-chat[open]{display:flex;flex-direction:column;height:min(540px,calc(var(--game-height,100dvh) - 16px));overflow:hidden}
+ .in-room #room-chat .chat-heading,.in-room #chat-form,.in-room #chat-status{flex:none}
+ .in-room #chat-messages{flex:1;min-height:0;height:auto;margin:10px 0;overflow-y:auto}
+ .in-room #room-chat .chat-heading h2{font-size:21px}.in-room #room-chat .chat-heading small{font-size:10px}
+ .in-room #chat-status:empty{display:none}.in-room #chat-form label{font-size:10px}
+ .in-room.keyboard-open{padding-top:0}
+ .in-room.keyboard-open[data-in-game=false] .team-picker,.in-room.keyboard-open[data-in-game=false] #table-toolbar,.in-room.keyboard-open[data-in-game=false] .hand-dock{display:none!important}
+ .in-room.keyboard-open[data-in-game=false] .game-layout{padding-right:0}
+ .in-room.keyboard-open[data-in-game=false] #lobby-chat{position:static;flex:1;width:100%;min-height:0;max-height:none;margin:0;padding:8px}
+ .in-room.keyboard-open #room{padding-bottom:4px}
+}
