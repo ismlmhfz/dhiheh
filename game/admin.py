@@ -52,7 +52,9 @@ class TableAdmin(admin.ModelAdmin):
     def invite_status(self,obj):
         info=details(obj)
         return 'Open until '+info['expires_at'] if info['open'] else info['reason']
-    def watch_link(self,obj): return format_html('<a href="/watch/{}/" target="_blank" rel="noopener">Watch public table</a>',obj.code)
+    def watch_link(self,obj):
+        prefix="/dutch/watch/" if obj.state.get("game_type")=="dutch" else "/watch/"
+        return format_html('<a href="{}{}/" target="_blank" rel="noopener">Watch public table</a>',prefix,obj.code)
     @admin.action(description='Close invitations for selected tables')
     def close_invitations(self,request,queryset):
         with transaction.atomic():

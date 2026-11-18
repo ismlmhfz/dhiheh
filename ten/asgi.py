@@ -6,5 +6,5 @@ from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 from channels.security.websocket import AllowedHostsOriginValidator
 from django.urls import re_path
-from game.consumer import RoomConsumer
-application = ProtocolTypeRouter({'http':django_application,'websocket':AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter([re_path(r'ws/room/(?P<code>[A-Z0-9]{6})/$',RoomConsumer.as_asgi())])))})
+from game.dutch_consumer import IsolatedTenConsumer as RoomConsumer, DutchConsumer
+application = ProtocolTypeRouter({'http':django_application,'websocket':AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter([re_path(r'ws/room/(?P<code>[A-Z0-9]{6})/$',RoomConsumer.as_asgi()),re_path(r'ws/dutch/(?P<code>[A-Z0-9]{6})/$',DutchConsumer.as_asgi()),re_path(r'ws/dutch/watch/(?P<code>[A-Z0-9]{6})/$',DutchConsumer.as_asgi(),{'watch':True})])))})

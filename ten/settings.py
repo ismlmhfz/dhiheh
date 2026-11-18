@@ -42,3 +42,6 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL','Card Club <noreply@loc
 VOICE_ICE_SERVERS = [{'urls':['stun:stun.l.google.com:19302']}]
 if os.environ.get('TURN_URL'):
     VOICE_ICE_SERVERS.append({'urls':os.environ['TURN_URL'].split(','),'username':os.environ.get('TURN_USERNAME',''),'credential':os.environ.get('TURN_PASSWORD','')})
+
+# Reject cross-game routes before the original 10 views are invoked.
+MIDDLEWARE += ['game.dutch_views.TenIsolationMiddleware']

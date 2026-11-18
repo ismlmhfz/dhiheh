@@ -28,3 +28,12 @@ urlpatterns += [
 
 from django.contrib import admin
 urlpatterns += [path('admin/',admin.site.urls)]
+
+# Dutch has its own table, API and allowlisted spectator view.
+from game import dutch_views
+urlpatterns += [
+    path('dutch/',dutch_views.index,name='dutch'),
+    path('dutch/room/<str:code>/',dutch_views.index,name='dutch_room'),
+    path('dutch/watch/<str:code>/',dutch_views.index,{'watch':True},name='dutch_watch'),
+    path('dutch/api/<str:action>/',dutch_views.api),
+]
