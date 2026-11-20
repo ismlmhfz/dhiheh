@@ -5,7 +5,7 @@ const config=JSON.parse(document.getElementById('dutch-config').textContent);
 const $=id=>document.getElementById(id), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const suits={C:'♣',D:'♦',H:'♥',S:'♠'};
 let state=null,socket=null,offset=null,retry=0,stopped=false,lastTurn=null,lastRound=null,lastEvent=null,noticeTimer;
-let selection=new Set(),queenSource=null,takeDiscard=false,pendingDraw=null;
+let selection=new Set(),queenSource=null,takeDiscard=false,pendingDraw=null,feed=[];
 const pending=new Map(),messages=new Map();
 const now=()=>Date.now()/1000+(offset??0);
 function html(id,value){if($(id).innerHTML!==value)$(id).innerHTML=value;}
@@ -44,8 +44,9 @@ function accept(next){if(!next||next.deleted){end('This table has closed.');retu
  if(fresh){const e=next.event;  // track an opponent's pending drawn card so its slot stays marked until they resolve it
   if(e.kind==='draw.preview')pendingDraw={seat:e.seat,slot:e.slot};
   else if(pendingDraw&&(e.kind==='round.finished'||((e.kind==='card.discarded'||e.kind==='cut.accepted')&&e.seat===pendingDraw.seat)))pendingDraw=null;}
+ if(next.status==='lobby')feed=[];
  state=next;render();
- if(fresh)animate(next.event,rects);
+ if(fresh){animate(next.event,rects);const d=describe(next.event);if(d){feed.unshift(d);if(feed.length>7)feed.pop();renderFeed();}}
 }
 // Lightweight per-frame update: timers tick here; a full render only happens on real state changes.
 function refresh(){const s=state;if(!s)return;
@@ -61,8 +62,8 @@ function animate(e,rects){const disc=$('discard-face')?.getBoundingClientRect();
   if(e.source==='discard'&&e.slot)fly(disc,at(e.slot));            // taken card slides from the pile into the slot
   if(e.slot)pulse(e.slot,true);
   playCard(from,top,disc);}                                        // the played card pops at its slot (readable), then flies to the pile
- else if(e.kind==='cut.accepted'&&e.slot){pulse(e.slot,true,'#7ad7a0');playCard(rects[e.slot],top,disc);}
- else if(e.kind==='cut.penalty'){if(e.slot){pulse(e.slot,true,'#ff7a7a');rejectAt(at(e.slot),state.cut_reveal?.face);}if(e.penalty){fly($('draw-pile').getBoundingClientRect(),at(e.penalty));pulse(e.penalty,true,'#ff7a7a');}}
+ else if(e.kind==='cut.accepted'&&e.slot){pulse(e.slot,true,'#7ad7a0');fly(rects[e.slot],disc,top);}                 // glide to the pile (no enlarge)
+ else if(e.kind==='cut.penalty'){if(e.slot)pulse(e.slot,true,'#ff7a7a');if(e.penalty){fly($('draw-pile').getBoundingClientRect(),at(e.penalty));pulse(e.penalty,true,'#ff7a7a');}}
  else if(e.kind==='power.used'&&e.power==='queen'){pulse(e.slot,true);pulse(e.target_slot,true);fly(rects[e.slot],at(e.target_slot));}
  else if(e.kind==='power.used'&&e.power==='king'&&e.target_slot)pulse(e.target_slot,true);
 }
@@ -72,8 +73,6 @@ function fly(from,to,card){if(reduced()||!from||!to)return;const el=floatCard(fr
 // Pop a card up and enlarge it at its source, hold so it's readable, then glide it to the pile.
 function playCard(from,card,to){if(!from)return;if(reduced()){fly(from,to,card);return;}const el=floatCard(from,card);const dx=to?to.x-from.x:0,dy=to?to.y-from.y:0;
  el.animate([{transform:'translate(0,0) scale(1)',opacity:1,offset:0},{transform:'translate(0,-26px) scale(2)',opacity:1,offset:.22},{transform:'translate(0,-26px) scale(2)',opacity:1,offset:.62},{transform:`translate(${dx}px,${dy}px) scale(1)`,opacity:to?.3:0,offset:1}],{duration:1350,easing:'ease-in-out'}).finished.finally(()=>el.remove());}
-// a failed cut: pop the card up, shake it (rejected), settle back face-down into its slot
-function rejectAt(rect,card){if(!rect||reduced())return;const el=floatCard(rect,card);el.animate([{transform:'translate(0,0) scale(1)',opacity:1,offset:0},{transform:'translate(0,-18px) scale(1.8)',opacity:1,offset:.28},{transform:'translate(-8px,-18px) scale(1.8) rotate(-5deg)',offset:.48},{transform:'translate(8px,-18px) scale(1.8) rotate(5deg)',offset:.68},{transform:'translate(0,0) scale(1)',opacity:.12,offset:1}],{duration:1500,easing:'ease-in-out'}).finished.finally(()=>el.remove());}
 function pulse(handle,strong,color){const el=document.querySelector(`#room [data-slot="${handle}"]`);const c=color||'#ffd46c';if(el&&!reduced())el.animate([{boxShadow:`0 0 0 3px ${c}, 0 0 20px ${c}`},{boxShadow:'0 0 0 0 transparent'}],{duration:strong?1300:600});}
 function end(message){stopped=true;socket?.close();$('connection').textContent=message+' ';const back=document.createElement('a');back.href='/dutch/';back.textContent='Back to Dutch';$('connection').append(back);notice(message);for(const item of pending.values())item.reject(Error(message));pending.clear();document.querySelectorAll('#room button').forEach(b=>b.disabled=true);}
 function connect(){if(stopped)return;socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws/dutch/${config.watch?'watch/':''}${config.code}/`);
@@ -98,7 +97,7 @@ function render(){if(!state)return;const s=state,own=s.seat!==null,host=s.seat==
  show('lobby',s.status==='lobby');show('play',active);show('results',results);show('delete',host);show('chat-open',own);$('leave').textContent=own?'Leave':'Back to Dutch';$('invite').textContent=s.invite_open?'Copy invite':'Copy spectator link';
  html('lobby-seats',s.players.map((p,i)=>`<div class="lobby-seat ${p?.ready?'ready':''}"><span class="avatar">${p?esc(p.name.slice(0,1).toUpperCase()):'+'}</span><strong>${p?esc(p.name):`Open seat ${i+1}`}${i===s.host?' · Host':''}</strong><small>${p?`${p.ready?'Ready':'Not ready'} · ${p.connected?'online':'offline'}`:'Waiting for a player'}</small></div>`).join(''));
  html('lobby-actions',own?button('ready',s.players[s.seat]?.ready?'Cancel ready':'I’m ready',false,'gold')+(host?button('start','Start Dutch',!s.players.every(p=>p?.ready&&p.connected)):''):'<p>You are spectating.</p>');
- if(active)renderPlay(s,own);
+ if(active){renderPlay(s,own);renderFeed();}
  html('score-content',scoreTable()+s.round_history.map(r=>`<details><summary>Round ${r.round} · ${r.reason==='empty_cut'?'Empty hand':'Dutch'}</summary>${roundDetails(r)}</details>`).join(''));
  if(results)renderResults(s,host);
  if(s.event&&lastEvent!==s.event.id){if(lastEvent!==null)eventFeedback(s);lastEvent=s.event.id;}
@@ -136,7 +135,7 @@ function renderPlay(s,own){
  if(own){
   const picking=s.status==='initial_peek'&&s.phase==='select'&&!s.initial_selected;
   const canTarget=picking||!!s.drawn||takeDiscard||!!s.power;
-  html('hand',s.hands[s.seat].map((e,i)=>slotCard(e,s.seat,{selectable:canTarget,selected:selection.has(e.slot),n:i+1,drawn:!!(s.drawn&&e.slot===s.drawn.slot)})).join(''));
+  html('hand',s.hands[s.seat].map((e,i)=>slotCard(e,s.seat,{selectable:canTarget,selected:selection.has(e.slot),n:s.hands[s.seat].length-i,drawn:!!(s.drawn&&e.slot===s.drawn.slot)})).join(''));
   $('hand-help').textContent=picking?`${selection.size} / ${s.reveal_count} selected`:s.status==='initial_peek'?'Revealing…':s.power?.kind==='jack'?'Tap a card to peek':s.power?.kind==='queen'?(queenSource?'Now tap an opponent’s card':'Tap your card to give away'):s.power?.kind==='king'?'Tap a card to lock/unlock':s.drawn?'Tap the glowing drawn card to discard it, or another card to keep it':takeDiscard?'Tap the card to replace':s.cut&&s.unlocked?`Double-tap your ${s.cut.rank} to cut`:'Double-tap a card to cut when a window is open';
   // hints only — no PEEK button (picks auto-save and reveal on the timer); no CUT button (double-tap); Dutch is the fab
   let actions='';
@@ -152,19 +151,22 @@ function renderResults(s,host){
  const title=s.status==='abandoned'?'Round abandoned.':s.status==='match_results'?`${s.winner_seats.map(player).map(esc).join(' & ')} ${s.winner_seats.length===1?'wins':'win'}!`:`Round ${s.round} complete.`;
  html('results',`<span class="eyebrow">${s.status==='abandoned'?'NO ONE WAS CONNECTED':'LOWEST TOTAL WINS'}</span><h2>${title}</h2>${s.round_result?roundDetails(s.round_result):'<p>No points were awarded for the unfinished round.</p>'}${scoreTable()}<div class="action-row">${host?(s.status==='round_results'?button('next_round','Deal next round',false,'gold'):button('rematch','Back to ready screen',false,'gold')):'<p>Waiting for the host.</p>'}<a href="/dutch/">Back to Dutch</a></div>`);
 }
-const faceName=c=>c?`${c.rank}${suits[c.suit]||''}`:'a card';
-function eventFeedback(s){const e=s.event,who=player(e.seat),top=s.discard;
- if(e.kind==='draw.preview'){if(e.seat!==s.seat)notice(`${who} drew a card.`);}
- else if(e.kind==='card.discarded')notice(e.source==='discard'?`${who} took from the pile and set down ${faceName(top)}.`:e.source==='timeout'?`${who} timed out — ${faceName(top)} discarded.`:`${who} discarded ${faceName(top)}.`);
- else if(e.kind==='dutch.called')notice(`${who} called Dutch! Everyone else gets one last turn.`);
- else if(e.kind==='cut.penalty')notice(`${who} missed the cut: one hidden penalty card.`);
- else if(e.kind==='cut.accepted')notice(`${who} cut ${faceName(top)} and takes the turn.`);
- else if(e.kind==='power.used'&&e.power==='queen')notice(`${who} used a Queen to blind-swap with ${player(e.target_seat)}.`);
- else if(e.kind==='power.used'&&e.power==='jack')notice(`${who} used a Jack to peek at a card.`);
- else if(e.kind==='power.used'&&e.power==='king')notice(`${who} ${e.mode==='lock'?'locked':'unlocked'} ${e.target_seat===e.seat?'their own':player(e.target_seat)+'’s'} card.`);
- else if(e.kind==='turn.skipped')notice(`${who} ran out of time and was skipped.`);
- const t=$('table');if(t&&!reduced())t.animate([{opacity:.85},{opacity:1}],{duration:250});
+const chip=c=>c?`<span class="chip${c&&'DH'.includes(c.suit)?' red':''}">${esc(c.rank)}${suits[c.suit]||''}</span>`:'';
+function describe(e){const s=state,who=esc(player(e.seat)),top=s.discard;
+ if(e.kind==='draw.preview')return `<strong>${who}</strong> drew a card`;
+ if(e.kind==='card.discarded')return e.source==='discard'?`<strong>${who}</strong> took the pile card, set down ${chip(top)}`:e.source==='timeout'?`<strong>${who}</strong> timed out — discarded ${chip(top)}`:`<strong>${who}</strong> discarded ${chip(top)}`;
+ if(e.kind==='cut.accepted')return `<strong>${who}</strong> cut ${chip(top)} ✓ — takes the turn`;
+ if(e.kind==='cut.penalty')return `<strong>${who}</strong> wrong cut ${chip(s.cut_reveal?.face)} ✗ — +1 penalty card`;
+ if(e.kind==='dutch.called')return `<strong>${who}</strong> called <b class="hot">DUTCH!</b>`;
+ if(e.kind==='power.used'&&e.power==='queen')return `<strong>${who}</strong> Queen blind-swap with ${esc(player(e.target_seat))}`;
+ if(e.kind==='power.used'&&e.power==='jack')return `<strong>${who}</strong> Jack peek`;
+ if(e.kind==='power.used'&&e.power==='king')return `<strong>${who}</strong> ${e.mode==='lock'?'locked':'unlocked'} a card`;
+ if(e.kind==='turn.skipped')return `<strong>${who}</strong> skipped (ran out of time)`;
+ if(e.kind==='round.started')return `— Round ${s.round} begins —`;
+ return null;
 }
+function renderFeed(){if($('feed'))html('feed',feed.map((d,i)=>`<div class="feed-row${i===0?' latest':''}">${d}</div>`).join('')||'<div class="feed-row muted">Moves appear here.</div>');}
+function eventFeedback(s){const t=$('table');if(t&&!reduced())t.animate([{opacity:.9},{opacity:1}],{duration:200});if(s.event?.kind==='dutch.called')notice(`${player(s.event.seat)} called Dutch! One last turn each.`);}
 // --- a single click router for every slot (own hand + opponents) ---
 function onSlot(seat,slot,locked){const s=state;if(!s||s.seat===null)return;
  if(s.status==='initial_peek'&&s.phase==='select'&&seat===s.seat){if(selection.has(slot))selection.delete(slot);else if(selection.size<s.reveal_count)selection.add(slot);act('initial_peek',{slots:[...selection]});render();return;}

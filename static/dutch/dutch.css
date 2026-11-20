@@ -102,3 +102,18 @@ button.pick{min-width:62px;padding:10px 14px;font-weight:800;font-size:15px;bord
 
 /* keep DUTCH! centered inside the circle (no overflow) */
 .dutch-fab{display:inline-flex;align-items:center;justify-content:center;text-align:center;line-height:1;padding:0;white-space:nowrap;overflow:hidden;font-size:15px}
+
+/* persistent move feed — plain-text record of every move, always visible during play */
+.feed{margin:8px auto;max-width:640px;max-height:80px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;padding:7px 12px;background:#1c1030cc;border:1px solid #d4b27233;border-radius:12px;font-size:13px;scrollbar-width:thin}
+.feed:empty{display:none}
+.feed-row{color:#cbb9e8;line-height:1.35}
+.feed-row.latest{color:#ffe9c2;font-weight:600}
+.feed-row.muted{color:var(--muted)}
+.chip{display:inline-block;min-width:21px;text-align:center;padding:0 5px;margin:0 2px;border-radius:5px;background:#f3ead6;color:#201433;font-weight:800;font-size:12px;vertical-align:baseline}
+.chip.red{color:#c0243a}
+.feed-row .hot{color:#ffcf7a}
+@media(max-width:640px){.feed{max-height:64px;font-size:12px}}
+
+/* hand wraps to a second row past ~6 cards (card numbers run right-to-left, set in JS) */
+.hand{flex-wrap:wrap;overflow:visible;justify-content:center;gap:8px;max-width:480px;margin:6px auto;padding:6px}
+@media(max-width:640px){.hand{max-width:100%;padding:6px 66px 6px 6px}}

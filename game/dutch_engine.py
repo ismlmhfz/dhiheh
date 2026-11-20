@@ -396,7 +396,7 @@ def do_cut(s, seat, data, now, rng):
     s['cut_reveal'] = {'seat': seat, 'slot': entry['slot'], 'face': copy.deepcopy(s['cards'][entry['card']]), 'until': now + s['rules']['failed_cut_reveal_seconds']}
     penalty = None
     if s['draw_pile'] or (s['rules']['empty_draw_pile'] == 'reshuffle' and len(s['discard_pile']) > 1):
-        penalty = token(rng); s['hands'][seat].append({'slot': penalty, 'card': draw_card(s, rng), 'locked': False})
+        penalty = token(rng); s['hands'][seat].insert(0, {'slot': penalty, 'card': draw_card(s, rng), 'locked': False})  # leftmost, like a draw
     event(s, 'cut.penalty', seat, slot=entry['slot'], penalty=penalty)
     if s['rules']['failed_cutter_takes_next_turn']: begin_turn(s, seat, now)
 
