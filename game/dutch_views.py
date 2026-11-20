@@ -25,6 +25,9 @@ def rate(key,limit=90,period=60):
 @never_cache
 @ensure_csrf_cookie
 def index(request,code=None,watch=False):
+    if code and Room.objects.filter(code=code.upper(),state__game_type='dutch',state__schema_version=1).exists():
+        from . import dutch_legacy_views
+        return dutch_legacy_views.index(request,code,watch)
     service.identity(request)
     if code:
         room=Room.objects.filter(code=code.upper()).first()
@@ -42,6 +45,9 @@ def api(request,action):
         if len(request.body)>4096:raise ValueError('Request too large.')
         data=json.loads(request.body)
         if not isinstance(data,dict):raise ValueError('Expected an object.')
+        if action!='create' and Room.objects.filter(code=str(data.get('code','')).upper(),state__game_type='dutch',state__schema_version=1).exists():
+            from . import dutch_legacy_views
+            return dutch_legacy_views.api(request,action)
         who=service.identity(request);rate(who)
         if action=='create':
             state=service.create(who,data.get('name'),data.get('limit',4))

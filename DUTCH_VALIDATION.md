@@ -52,3 +52,33 @@ exercised by a person.**
 ```
 
 Report any UI issue found and it can be fixed against this build.
+
+## 21 November 2026 — branch update and GSAP
+
+Imported `feat/dutch` through `2cfae83` and added locally served GSAP 3.13.0.
+The game uses the updated rotating reveal choice, timed turns, drawn-card discard,
+Queen/King powers and double-tap cuts. Original 10 game files remain unchanged.
+
+- Full PostgreSQL suite: **124 tests passed**, including real row-lock races,
+  original-room compatibility and public animation metadata/expiry tests.
+- Chromium six-player and WebKit two-player matches: ten rounds plus rematch,
+  no browser errors. Tests now assert errors after rematch as well as gameplay.
+- Firefox: cut, failed cut/penalty, King lock, Queen blind swap, Jack private peek,
+  empty-hand round end, overlay cleanup and reduced motion passed.
+- Forced socket outage: polling, synchronized peek, expired draw reconnect,
+  required discard and chat passed.
+- Presentation-layer checks: private faces never enter flying overlays, off-screen
+  movement does not widen the page, overlays expire and null-event rematches are
+  safe. Sampled median frame intervals were approximately 16–17ms in the headless
+  browser checks; this is not a physical-device performance guarantee.
+
+Animations use transforms/opacity, cancel obsolete movement, clean up on resize
+or backgrounding, and have wall-clock cleanup in case animation frames stall.
+Round results wait briefly for the final public card movement; server actions,
+scoring and reveal expiry do not wait for animations. GSAP guidance used:
+https://gsap.com/docs/v3/GSAP/gsap.matchMedia()/
+
+Existing schema-1 tables use preserved engine/UI modules from `f01a92c`, retaining
+rules, seats and scores. New tables use schema 2. No room-state rewrite or database
+migration is needed. User authorization includes bringing the update to the live
+Dutch game; production verification is recorded in the host deployment log.

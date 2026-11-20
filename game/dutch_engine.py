@@ -213,7 +213,8 @@ def finish(s, reason, actor):
     s.update(status='match_results' if final else 'round_results', phase='results', turn=None,
              turn_deadline=None, reserved=None, power=None, cut_window=None, cut_reveal=None, initial_peeks={})
     if final: s['winner_seats'] = [i for i, v in enumerate(s['scores']) if v == min(s['scores'])]
-    s['turn_id'] += 1; event(s, 'round.finished', actor, reason=reason)
+    last_move={k:copy.deepcopy(v) for k,v in (s.get('event') or {}).items() if k in ('kind','seat','slot','source')}
+    s['turn_id'] += 1; event(s, 'round.finished', actor, reason=reason, last_move=last_move)
 
 
 # --- timers ------------------------------------------------------------------
@@ -426,7 +427,7 @@ def public(s, viewer, now):
         discard=copy.deepcopy(s['cards'][s['discard_pile'][-1]]) if s['discard_pile'] else None,
         unlocked=bool(s['first_turn_done'] and all(s['first_turn_done'])),
         cut=({'event_id': s['cut_window']['event_id'], 'rank': s['cut_window']['rank']} if s['cut_window'] else None),
-        cut_reveal=copy.deepcopy(s['cut_reveal']) if s['cut_reveal'] else None,
+        cut_reveal=copy.deepcopy(s['cut_reveal']) if s['cut_reveal'] and now<s['cut_reveal']['until'] else None,
         reveals={}, drawn=None, power=None,
         initial_selected=bool(own and len(s['initial_peeks'].get(str(viewer), {}).get('slots', [])) == s['reveal_count']),
         can_call=bool(own and s['status'] == 'playing' and viewer == s['turn'] and s['phase'] == 'normal_choice'

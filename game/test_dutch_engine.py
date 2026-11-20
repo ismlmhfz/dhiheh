@@ -305,3 +305,17 @@ class ProjectionTests(SimpleTestCase):
         pub = e.public(s, 1, 0.0)
         self.assertEqual(s['status'], 'round_results')
         self.assertIsNotNone(pub['round_result'])
+
+class AnimationProjectionTests(SimpleTestCase):
+    def test_final_cut_keeps_only_public_motion_metadata(self):
+        s=rigged([['2'],['3']],discard='2');e.open_cut(s)
+        e.act(s,0,'cut',{'slot':'s0_0','event_id':s['cut_window']['event_id']},1)
+        view=e.public(s,None,1)
+        self.assertEqual(view['event']['kind'],'round.finished')
+        self.assertEqual(view['event']['last_move'],{'kind':'cut.accepted','seat':0,'slot':'s0_0'})
+        self.assertEqual(view['status'],'round_results')
+    def test_failed_cut_face_expires_without_a_timer_tick(self):
+        s=rigged([['3'],['4']],discard='2',draw_ranks=['5']);e.open_cut(s)
+        e.act(s,0,'cut',{'slot':'s0_0','event_id':s['cut_window']['event_id']},1)
+        self.assertIsNotNone(e.public(s,None,2.99)['cut_reveal'])
+        self.assertIsNone(e.public(s,None,3)['cut_reveal'])

@@ -77,6 +77,10 @@ def command_id(data):
 
 @serialized
 def mutate(code,who,action,data=None,*,channel=None,now=None):
+    legacy=Room.objects.filter(code=code,state__game_type='dutch',state__schema_version=1).exists()
+    if legacy:
+        from . import dutch_legacy_service
+        return dutch_legacy_service.mutate(code,who,action,data,channel=channel,now=now)
     data=data or {};now=time.time() if now is None else now
     with transaction.atomic():
         room=check_room(Room.objects.select_for_update().get(code=code))

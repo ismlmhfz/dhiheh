@@ -35,7 +35,6 @@ class DutchConcurrencyTests(TransactionTestCase):
     def conserved(self):
         s=Room.objects.get(code=self.code).state
         ids=[x['card'] for h in s['hands'] for x in h]+s['draw_pile']+s['discard_pile']
-        if s['reserved']:ids.append(s['reserved']['card'])
         self.assertEqual(len(ids),52);self.assertEqual(len(set(ids)),52)
         return s
     def test_simultaneous_cut_only_one_claim(self):

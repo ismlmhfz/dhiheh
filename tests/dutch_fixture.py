@@ -19,6 +19,8 @@ with transaction.atomic():
         'cut':   ([['2C', '3C', '4C', '5C'], ['6C', '7C', '8C', '9C']], '2S', None, 1),   # seat 0 cuts its 2C
         'bad':   ([['3C', '4C', '5C', '6C'], ['7C', '8C', '9C', '10C']], '2S', None, 1),   # seat 0 cuts a wrong rank
         'empty': ([['2C'], ['6C', '7C', '8C', '9C']], '2S', None, 1),                      # seat 0 cuts its last card
+        'queen': ([['3C','4C','5C','6C'],['7C','8C','9C','10C']], '2S', 'QD', 0),
+        'jack': ([['3C','4C','5C','6C'],['7C','8C','9C','10C']], '2S', 'JD', 0),
         'king':  ([['3C', '4C', '5C', '6C'], ['7C', '8C', '9C', '10C']], '2S', 'KD', 0),   # seat 0 draws+discards a King
     }
     hands, top, draw_top, turn = layouts[kind]
@@ -37,7 +39,7 @@ with transaction.atomic():
              initial_peeks={}, peek_reveal_until=None, reserved=None, power=None,
              cut_window=None, cut_reveal=None, round_result=None,
              turn_deadline=time.time() + 300)
-    if kind != 'king':
+    if kind not in ('king','queen','jack'):
         e.open_cut(s)
     s['turn_id'] += 1; s['revision'] += 1; e.event(s, 'fixture.' + kind)
     room.save(update_fields=['state'])

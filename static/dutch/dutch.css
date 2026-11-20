@@ -117,3 +117,12 @@ button.pick{min-width:62px;padding:10px 14px;font-weight:800;font-size:15px;bord
 /* hand wraps to a second row past ~6 cards (card numbers run right-to-left, set in JS) */
 .hand{flex-wrap:wrap;overflow:visible;justify-content:center;gap:8px;max-width:480px;margin:6px auto;padding:6px}
 @media(max-width:640px){.hand{max-width:100%;padding:6px 66px 6px 6px}}
+
+/* GSAP overlays use compositor-friendly transforms and never intercept card input. */
+.motion-card,.motion-accent{position:fixed;pointer-events:none!important;z-index:45;transform-origin:0 0;will-change:transform,opacity;contain:layout style}
+.motion-card{margin:0!important;animation:none!important;backface-visibility:hidden}
+.motion-accent{border:2px solid #ffd46c;border-radius:12px;background:transparent;transform-origin:center}
+.motion-accent.success{border-color:#7ad7a0}.motion-accent.danger{border-color:#ff7a7a}
+#hand .card{animation:none;backface-visibility:hidden}
+
+.motion-layer{position:fixed;inset:0;overflow:hidden;contain:strict;z-index:45;pointer-events:none!important}

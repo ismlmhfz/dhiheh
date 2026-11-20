@@ -20,7 +20,8 @@ function player(i){return state?.players[i]?.name||'Waiting';}
 // A single slot button, used for the own hand and every opponent hand. Faces appear only when allowed by the server.
 function slotCard(entry,seat,{selectable=false,selected=false,small=false,n=null,drawn=false}={}){
  const reveal=seat===state.seat?state.reveals[entry.slot]:null;
- const f=(reveal&&reveal.until>now())?reveal.face:entry.face;
+ const cut=state.cut_reveal;const publicCut=cut&&cut.slot===entry.slot&&cut.until>now()?cut.face:null;
+ const f=(reveal&&reveal.until>now())?reveal.face:(publicCut||entry.face);
  const cls=['card'+color(f),entry.locked?'locked':'',f?'revealed':''].join(' ');
  return `<button class="hand-slot ${small?'opp-slot':''} ${selectable?'pickable':''} ${selected?'is-selected':''} ${drawn?'is-drawn':''}" data-seat="${seat}" data-slot="${entry.slot}" ${selectable?'':'tabindex="-1"'} aria-pressed="${selected}" aria-label="${seat===state.seat?'Your card':player(seat)+'’s card'}${n?` ${n}`:''}${drawn?' (just drawn)':''}${entry.locked?' (locked)':''}"><span class="${cls}">${face(f)}${entry.locked?'<i class="lock">🔒</i>':''}${drawn?'<i class="drawn-badge">NEW</i>':''}</span>${n?`<small>${n}</small>`:''}</button>`;
 }
@@ -37,7 +38,7 @@ function accept(next){if(!next||next.deleted){end('This table has closed.');retu
  const prev=state;
  // Nothing actually changed server-side (idle tick): keep the view, only refresh countdowns.
  if(prev&&next.revision===prev.revision&&next.event?.id===prev.event?.id){state=next;refresh();return;}
- const rects={};document.querySelectorAll('#room [data-slot]').forEach(el=>{const c=el.querySelector('.card');if(c)rects[el.dataset.slot]=c.getBoundingClientRect();});
+ const motionFrame=window.DutchMotion?.capture(prev,next);
  if(next.turn_id!==lastTurn){takeDiscard=false;queenSource=null;lastTurn=next.turn_id;}
  if(next.round!==lastRound){selection.clear();pendingDraw=null;lastRound=next.round;}
  const fresh=prev&&next.event&&next.event.id!==prev.event?.id;
@@ -46,7 +47,8 @@ function accept(next){if(!next||next.deleted){end('This table has closed.');retu
   else if(pendingDraw&&(e.kind==='round.finished'||((e.kind==='card.discarded'||e.kind==='cut.accepted')&&e.seat===pendingDraw.seat)))pendingDraw=null;}
  if(next.status==='lobby')feed=[];
  state=next;render();
- if(fresh){animate(next.event,rects);const d=describe(next.event);if(d){feed.unshift(d);if(feed.length>7)feed.pop();renderFeed();}}
+ window.DutchMotion?.play(prev,next,motionFrame);
+ if(fresh){const d=describe(next.event);if(d){feed.unshift(d);if(feed.length>7)feed.pop();renderFeed();}}
 }
 // Lightweight per-frame update: timers tick here; a full render only happens on real state changes.
 function refresh(){const s=state;if(!s)return;
@@ -54,27 +56,11 @@ function refresh(){const s=state;if(!s)return;
  const left=playing&&s.turn_deadline?Math.max(0,s.turn_deadline-now()):(s.status==='choose_reveal'||s.phase==='select')&&s.setup_deadline?Math.max(0,s.setup_deadline-now()):null;
  $('turn-timer').textContent=left==null?'':`${Math.ceil(left)}s`;$('turn-timer').className=left!=null&&left<=6?'urgent':'';show('turn-timer',left!=null);
  let changed=false;for(const k of Object.keys(s.reveals)){if(s.reveals[k].until<=now()){delete s.reveals[k];changed=true;}}
+ if(s.drawn?.until<=now())s.drawn.face=null;
+ if(s.cut_reveal&&s.cut_reveal.until<=now()){s.cut_reveal=null;changed=true;}
  if(changed)render();  // a reveal just expired -> flip those faces back, once
 }
-function animate(e,rects){const disc=$('discard-face')?.getBoundingClientRect();const at=s=>document.querySelector(`#room [data-slot="${s}"] .card`)?.getBoundingClientRect();const top=state.discard;
- if(e.kind==='draw.preview'&&e.slot){fly($('draw-pile').getBoundingClientRect(),at(e.slot));pulse(e.slot,true);}   // deck -> opponent's leftmost, highlight it
- else if(e.kind==='card.discarded'){const from=e.slot?(rects[e.slot]||at(e.slot)):$('draw-pile').getBoundingClientRect();
-  if(e.source==='discard'&&e.slot)fly(disc,at(e.slot));            // taken card slides from the pile into the slot
-  if(e.slot)pulse(e.slot,true);
-  playCard(from,top,disc);}                                        // the played card pops at its slot (readable), then flies to the pile
- else if(e.kind==='cut.accepted'&&e.slot){pulse(e.slot,true,'#7ad7a0');fly(rects[e.slot],disc,top);}                 // glide to the pile (no enlarge)
- else if(e.kind==='cut.penalty'){if(e.slot)pulse(e.slot,true,'#ff7a7a');if(e.penalty){fly($('draw-pile').getBoundingClientRect(),at(e.penalty));pulse(e.penalty,true,'#ff7a7a');}}
- else if(e.kind==='power.used'&&e.power==='queen'){pulse(e.slot,true);pulse(e.target_slot,true);fly(rects[e.slot],at(e.target_slot));}
- else if(e.kind==='power.used'&&e.power==='king'&&e.target_slot)pulse(e.target_slot,true);
-}
-const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
-function floatCard(rect,card){const el=document.createElement('span');el.className='card flying-card'+(card?color(card):' back');el.innerHTML=card?face(card):'✦';Object.assign(el.style,{position:'fixed',pointerEvents:'none',zIndex:40,left:rect.x+'px',top:rect.y+'px',width:rect.width+'px',height:rect.height+'px'});document.body.append(el);return el;}
-function fly(from,to,card){if(reduced()||!from||!to)return;const el=floatCard(from,card);el.animate([{transform:'translate(0,0) scale(1)',opacity:1},{transform:`translate(${to.x-from.x}px,${to.y-from.y}px) scale(.92)`,opacity:.25}],{duration:480,easing:'ease-in-out'}).finished.finally(()=>el.remove());}
-// Pop a card up and enlarge it at its source, hold so it's readable, then glide it to the pile.
-function playCard(from,card,to){if(!from)return;if(reduced()){fly(from,to,card);return;}const el=floatCard(from,card);const dx=to?to.x-from.x:0,dy=to?to.y-from.y:0;
- el.animate([{transform:'translate(0,0) scale(1)',opacity:1,offset:0},{transform:'translate(0,-26px) scale(2)',opacity:1,offset:.22},{transform:'translate(0,-26px) scale(2)',opacity:1,offset:.62},{transform:`translate(${dx}px,${dy}px) scale(1)`,opacity:to?.3:0,offset:1}],{duration:1350,easing:'ease-in-out'}).finished.finally(()=>el.remove());}
-function pulse(handle,strong,color){const el=document.querySelector(`#room [data-slot="${handle}"]`);const c=color||'#ffd46c';if(el&&!reduced())el.animate([{boxShadow:`0 0 0 3px ${c}, 0 0 20px ${c}`},{boxShadow:'0 0 0 0 transparent'}],{duration:strong?1300:600});}
-function end(message){stopped=true;socket?.close();$('connection').textContent=message+' ';const back=document.createElement('a');back.href='/dutch/';back.textContent='Back to Dutch';$('connection').append(back);notice(message);for(const item of pending.values())item.reject(Error(message));pending.clear();document.querySelectorAll('#room button').forEach(b=>b.disabled=true);}
+function end(message){window.DutchMotion?.clear();stopped=true;socket?.close();$('connection').textContent=message+' ';const back=document.createElement('a');back.href='/dutch/';back.textContent='Back to Dutch';$('connection').append(back);notice(message);for(const item of pending.values())item.reject(Error(message));pending.clear();document.querySelectorAll('#room button').forEach(b=>b.disabled=true);}
 function connect(){if(stopped)return;socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws/dutch/${config.watch?'watch/':''}${config.code}/`);
  socket.onopen=()=>{retry=0;$('connection').textContent=config.watch?'Watching live · hidden cards stay private':'Connected · your private table';for(const item of pending.values())socket.send(JSON.stringify(item.packet));};
  socket.onmessage=e=>{let m;try{m=JSON.parse(e.data);}catch{return;}
@@ -94,7 +80,7 @@ function roundDetails(r){return `<p>${esc(player(r.actor))}: ${r.reason==='empty
 function render(){if(!state)return;const s=state,own=s.seat!==null,host=s.seat===s.host;
  const active=['choose_reveal','initial_peek','playing','dutch_final'].includes(s.status),results=['round_results','match_results','abandoned'].includes(s.status);
  show('landing',false);show('room',true);$('room-code').textContent=s.code;$('room-title').textContent=s.status==='lobby'?'Take your seat.':s.status==='match_results'?'Ten rounds. One story.':'Trust your memory.';
- show('lobby',s.status==='lobby');show('play',active);show('results',results);show('delete',host);show('chat-open',own);$('leave').textContent=own?'Leave':'Back to Dutch';$('invite').textContent=s.invite_open?'Copy invite':'Copy spectator link';
+ show('lobby',s.status==='lobby');show('play',active||!!window.DutchMotion?.holding);show('results',results&&!window.DutchMotion?.holding);show('delete',host);show('chat-open',own);$('leave').textContent=own?'Leave':'Back to Dutch';$('invite').textContent=s.invite_open?'Copy invite':'Copy spectator link';
  html('lobby-seats',s.players.map((p,i)=>`<div class="lobby-seat ${p?.ready?'ready':''}"><span class="avatar">${p?esc(p.name.slice(0,1).toUpperCase()):'+'}</span><strong>${p?esc(p.name):`Open seat ${i+1}`}${i===s.host?' · Host':''}</strong><small>${p?`${p.ready?'Ready':'Not ready'} · ${p.connected?'online':'offline'}`:'Waiting for a player'}</small></div>`).join(''));
  html('lobby-actions',own?button('ready',s.players[s.seat]?.ready?'Cancel ready':'I’m ready',false,'gold')+(host?button('start','Start Dutch',!s.players.every(p=>p?.ready&&p.connected)):''):'<p>You are spectating.</p>');
  if(active){renderPlay(s,own);renderFeed();}
@@ -166,7 +152,7 @@ function describe(e){const s=state,who=esc(player(e.seat)),top=s.discard;
  return null;
 }
 function renderFeed(){if($('feed'))html('feed',feed.map((d,i)=>`<div class="feed-row${i===0?' latest':''}">${d}</div>`).join('')||'<div class="feed-row muted">Moves appear here.</div>');}
-function eventFeedback(s){const t=$('table');if(t&&!reduced())t.animate([{opacity:.9},{opacity:1}],{duration:200});if(s.event?.kind==='dutch.called')notice(`${player(s.event.seat)} called Dutch! One last turn each.`);}
+function eventFeedback(s){if(s.event?.kind==='dutch.called')notice(`${player(s.event.seat)} called Dutch! One last turn each.`);}
 // --- a single click router for every slot (own hand + opponents) ---
 function onSlot(seat,slot,locked){const s=state;if(!s||s.seat===null)return;
  if(s.status==='initial_peek'&&s.phase==='select'&&seat===s.seat){if(selection.has(slot))selection.delete(slot);else if(selection.size<s.reveal_count)selection.add(slot);act('initial_peek',{slots:[...selection]});render();return;}
@@ -214,7 +200,7 @@ function showRules(r){const vals=Object.entries(r.card_values).map(([k,v])=>`${e
 function viewport(){const v=window.visualViewport;document.documentElement.style.setProperty('--visible-height',`${v?.height||innerHeight}px`);document.documentElement.style.setProperty('--visible-top',`${v?.offsetTop||0}px`);}
 window.visualViewport?.addEventListener('resize',viewport);window.visualViewport?.addEventListener('scroll',viewport);viewport();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&state)render();});
-setInterval(()=>{if(state)refresh();},250);
+setInterval(()=>{if(state)refresh();},50);
 showRules(config.rules);for(const form of [$('create-form'),$('join-form')])form.elements.name.value=config.nickname||'';
 if(config.code){show('landing',false);show('room',true);api('resync',{watch:config.watch}).then(s=>{if(!config.watch&&s.seat===null){$('join-form').elements.code.value=config.code;open('join-dialog');$('connection').textContent='Join this table or watch instead.';}else{accept(s);showRules(s.rules);connect();}}).catch(e=>notice(e.message));}
 })();

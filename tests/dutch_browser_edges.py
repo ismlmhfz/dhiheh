@@ -44,6 +44,7 @@ async def main():
                 await wait(a, "window.__dutch.power && window.__dutch.power.kind==='king'")
                 await a.locator('#hand [data-slot]').nth(1).click()  # lock one of your cards
                 await wait(a, 'window.__dutch.hands[0].some(c=>c.locked)')
+                await wait(b, 'window.__dutch.hands[0].some(c=>c.locked && c.face)')
                 assert any(card['locked'] and card['face'] for card in (await state(b))['hands'][0])  # locked face is public
             print('Firefox edge passed:', kind, flush=True)
         assert not errors, errors

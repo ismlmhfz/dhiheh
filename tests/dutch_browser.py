@@ -83,6 +83,8 @@ async def match(pw, engine, n):
             await pages[0].locator('[data-action=next_round]').click()
     assert s['status'] == 'match_results' and s['winner_seats']; assert not errors, errors
     await pages[0].locator('[data-action=rematch]').click(); await wait(pages[0], "window.__dutch.status==='lobby'"); assert (await state(pages[0]))['scores'] == [0] * n
+    await asyncio.gather(*(wait(p,"window.__dutch.status==='lobby'") for p in pages))
+    assert not errors,errors
     await browser.close(); return {'engine': engine, 'players': n, 'rounds': 10, 'errors': errors}
 
 
