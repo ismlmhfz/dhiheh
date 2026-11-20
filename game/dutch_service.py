@@ -44,7 +44,14 @@ def create(who,player_name,limit=4):
     raise ValueError('Please try creating the table again.')
 
 
+def abandon(s,seat=None):
+    s.update(status='abandoned',phase='abandoned',turn=None,turn_deadline=None,reserved=None,
+             power=None,cut_window=None,cut_reveal=None,initial_peeks={})
+    s.pop('all_idle_since',None);engine.event(s,'match.abandoned',seat)
+
+
 def presence(s,now):
+    # Leases drive connection dots for rendering only; play never pauses (no-pause rules).
     for p in s['players']:
         if not p:continue
         leases=p.get('connections',{})
@@ -53,12 +60,12 @@ def presence(s,now):
         p['connected']=bool(p['connections'])
         if p['connected']:p.pop('offline_since',None)
         else:p.setdefault('offline_since',min(now,last_expiry))
-    if s['status'] in engine.ACTIVE:
-        missing=[p for p in s['players'] if not p['connected']]
-        s['paused']=bool(missing)
-        if any(now-p['offline_since']>=s['rules']['disconnect_grace_seconds'] for p in missing):
-            s.update(status='abandoned',phase='abandoned',turn=None,reserved=None,cut_window=None,jack_peeks={},initial_peeks={},paused=False)
-            engine.event(s,'match.abandoned')
+    # Safeguard: if no seat has been connected for a full turn cycle, abandon the dead round.
+    if s['status'] in engine.ACTIVE and s['rules']['abandon_when_all_idle']:
+        seats=[p for p in s['players'] if p]
+        if seats and not any(p['connected'] for p in seats):
+            if now-max(p['offline_since'] for p in seats)>=s['rules']['turn_seconds']:
+                abandon(s)
 
 
 def command_id(data):
@@ -70,6 +77,10 @@ def command_id(data):
 
 @serialized
 def mutate(code,who,action,data=None,*,channel=None,now=None):
+    legacy=Room.objects.filter(code=code,state__game_type='dutch',state__schema_version=1).exists()
+    if legacy:
+        from . import dutch_legacy_service
+        return dutch_legacy_service.mutate(code,who,action,data,channel=channel,now=now)
     data=data or {};now=time.time() if now is None else now
     with transaction.atomic():
         room=check_room(Room.objects.select_for_update().get(code=code))
@@ -102,7 +113,6 @@ def mutate(code,who,action,data=None,*,channel=None,now=None):
                         if action=='start':engine.start(s,seat,now)
                         elif action=='next_round':
                             engine.require(s['status']=='round_results','Finish the current round first.')
-                            engine.require(all(p['connected'] for p in s['players']),'Wait for everyone to reconnect.')
                             engine.next_round(s,now)
                         elif action=='rematch':
                             engine.require(s['status'] in {'match_results','abandoned'},'Finish the current round first.')
@@ -122,8 +132,7 @@ def mutate(code,who,action,data=None,*,channel=None,now=None):
                                 if player:player['ready']=False
                             s['invitation_closed']=False
                         else:
-                            s.update(status='abandoned',phase='abandoned',turn=None,reserved=None,jack_peeks={},initial_peeks={},cut_window=None,paused=False)
-                            p['connections']={};p['connected']=False;engine.event(s,'match.abandoned',seat)
+                            p['connections']={};p['connected']=False;abandon(s,seat)
                     else:engine.act(s,seat,action,data,now)
                     s['commands']=(s['commands']+[key])[-512:]
         if s!=before:

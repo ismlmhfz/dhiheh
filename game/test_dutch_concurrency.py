@@ -17,8 +17,12 @@ class DutchConcurrencyTests(TransactionTestCase):
             d.mutate(self.code,who,'ready',{'command':str(uuid.uuid4())})
         d.mutate(self.code,'a','start',{'command':str(uuid.uuid4())})
         room=Room.objects.get(code=self.code);s=room.state
-        s['status']='playing';s['phase']='normal_choice';s['first_turn_done']=[True,True];s['initial_peeks']={}
-        s['initial_peeks_done']=[True,True];e.open_cut(s,time.time());room.save()
+        s.update(status='playing',phase='normal_choice',turn=0,turn_deadline=time.time()+30,
+                 first_turn_done=[True,True],initial_peeks={},initial_peeks_done=[True,True])
+        # make both players' first card match the discard rank so both cuts are valid for the race
+        rank=s['cards'][s['discard_pile'][-1]]['rank']
+        for i in (0,1):s['cards'][s['hands'][i][0]['card']]['rank']=rank
+        e.open_cut(s);room.save()
         self.s=s
     def race(self,calls):
         barrier=Barrier(len(calls))
@@ -31,11 +35,10 @@ class DutchConcurrencyTests(TransactionTestCase):
     def conserved(self):
         s=Room.objects.get(code=self.code).state
         ids=[x['card'] for h in s['hands'] for x in h]+s['draw_pile']+s['discard_pile']
-        if s['reserved']:ids.append(s['reserved']['card'])
         self.assertEqual(len(ids),52);self.assertEqual(len(set(ids)),52)
         return s
     def test_simultaneous_cut_only_one_claim(self):
-        calls=[(who,'cut',{'command':str(uuid.uuid4()),'slots':[self.s['hands'][i][0]['slot']],'event_id':self.s['cut_window']['event_id']}) for i,who in enumerate(['a','b'])]
+        calls=[(who,'cut',{'command':str(uuid.uuid4()),'slot':self.s['hands'][i][0]['slot'],'event_id':self.s['cut_window']['event_id']}) for i,who in enumerate(['a','b'])]
         results=self.race(calls)
         self.assertEqual(sum(isinstance(r,dict) for r in results),1)
         self.assertIn('Cut window closed',next(r for r in results if isinstance(r,str)));self.conserved()

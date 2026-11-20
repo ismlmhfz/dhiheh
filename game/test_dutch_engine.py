@@ -1,171 +1,321 @@
-import copy, random
-from unittest import TestCase
+import random
+from django.test import SimpleTestCase
 from . import dutch_engine as e
 
-class DutchEngineTests(TestCase):
-    def game(self,n=3,overrides=None):
-        s=e.new_state(n,'host','Host',0,overrides)
-        for i in range(n): s['players'][i]={'id':str(i),'name':str(i),'ready':True,'connected':True}
-        e.start(s,0,0,random.Random(3))
-        for i in range(n): e.act(s,i,'initial_peek',{'slots':[x['slot'] for x in s['hands'][i]][:s['peek_counts'][i]]},0)
-        e.tick(s,4)
-        return s
 
-    def command(self,s,seat,action,now=5,**kw):
-        return e.act(s,seat,action,{'turn_id':s['turn_id'],**kw},now)
+def seated(n):
+    s = e.new_state(n, '0', 'P0', 0.0)
+    for i in range(1, n):
+        s['players'][i] = {'id': str(i), 'name': f'P{i}', 'ready': True, 'connected': True, 'connections': {}}
+    for p in s['players']:
+        p['ready'] = True; p['connected'] = True
+    return s
 
-    def conserved(self,s):
-        ids=[x['card'] for h in s['hands'] for x in h]+s['draw_pile']+s['discard_pile']
-        if s['reserved']:ids.append(s['reserved']['card'])
-        self.assertEqual(len(ids),52);self.assertEqual(len(set(ids)),52)
 
-    def test_deals_all_capacities_and_private_peeks(self):
-        for n in range(2,7):
-            s=e.new_state(n,'a','A',0)
-            for i in range(n): s['players'][i]={'id':str(i),'name':str(i),'ready':True,'connected':True}
-            e.start(s,0,0,random.Random(n));self.conserved(s)
-            self.assertEqual([len(h) for h in s['hands']],[4]*n)
-            self.assertEqual(len(s['draw_pile']),51-4*n)
-            slots=[x['slot'] for x in s['hands'][0]][:s['peek_counts'][0]]
-            e.act(s,0,'initial_peek',{'slots':slots},1)
-            self.assertEqual(len(e.public(s,0,1)['reveals']),len(slots))
-            for viewer in [1,None]:self.assertEqual(e.public(s,viewer,1)['reveals'],{})
-            self.assertEqual(e.public(s,0,4)['reveals'],{})
-            with self.assertRaises(ValueError):e.act(s,0,'initial_peek',{'slots':slots},5)
+def rigged(ranks_per_seat, discard='2', now=0.0, unlocked=True, draw_ranks=()):
+    """Build a playing state with controlled ranks. Suits are arbitrary (cut matches rank)."""
+    n = len(ranks_per_seat)
+    s = seated(n)
+    s['rules']  # frozen defaults
+    cards, hands = {}, []
+    cid = 0
+    for seat, ranks in enumerate(ranks_per_seat):
+        hand = []
+        for j, r in enumerate(ranks):
+            key = f'c{cid}'; cards[key] = {'rank': r, 'suit': 'S'}; cid += 1
+            hand.append({'slot': f's{seat}_{j}', 'card': key, 'locked': False})
+        hands.append(hand)
+    dkey = f'c{cid}'; cards[dkey] = {'rank': discard, 'suit': 'H'}; cid += 1
+    draw = []
+    for r in draw_ranks:
+        key = f'c{cid}'; cards[key] = {'rank': r, 'suit': 'D'}; cid += 1; draw.append(key)
+    s.update(cards=cards, hands=hands, discard_pile=[dkey], draw_pile=draw,
+             status='playing', phase='normal_choice', round=1, chooser=0, starter=0,
+             turn=0, turn_id=5, turn_deadline=now + 30, first_turn_done=[unlocked] * n)
+    return s
 
-    def test_draw_hides_after_two_seconds_and_swap_conserves(self):
-        s=self.game();seat=s['turn'];self.command(s,seat,'draw',10)
-        self.assertIsNotNone(e.public(s,seat,11.99)['drawn']['face'])
-        self.assertIsNone(e.public(s,seat,12)['drawn']['face'])
-        self.assertIsNone(e.public(s,(seat+1)%3,11)['drawn'])
-        self.command(s,seat,'swap_drawn',13,slot=s['hands'][seat][0]['slot']);self.conserved(s)
 
-    def test_wrong_turn_and_first_cycle_locks(self):
-        s=self.game();seat=(s['turn']+1)%3
-        for action in ['draw','call']:
-            with self.assertRaises(ValueError):self.command(s,seat,action)
-        with self.assertRaises(ValueError):self.command(s,s['turn'],'call')
-        with self.assertRaises(ValueError):self.command(s,seat,'cut',slots=[s['hands'][seat][0]['slot']],event_id='fake')
+def card_ids(s):
+    # A drawn card lives at its leftmost hand slot, so hands already include it.
+    return [x['card'] for h in s['hands'] for x in h] + s['draw_pile'] + s['discard_pile']
 
-    def test_ten_rounds_and_final_turns(self):
-        for n in [2,3,5,6]:
-            s=self.game(n)
-            for rnd in range(1,11):
-                now=rnd*100
-                for _ in range(n):
-                    seat=s['turn'];self.command(s,seat,'take_discard',now,slot=s['hands'][seat][0]['slot']);now+=15;e.tick(s,now)
-                caller=s['turn'];self.command(s,caller,'call',now)
-                order=s['final_turn_order'][:];self.assertEqual(len(set(order)),n-1);self.assertNotIn(caller,order)
-                for seat in order:
-                    with self.assertRaises(ValueError):self.command(s,seat,'cut',now,slots=[s['hands'][seat][0]['slot']],event_id='fake')
-                    self.command(s,seat,'take_discard',now,slot=s['hands'][seat][0]['slot']);now+=15;e.tick(s,now)
-                self.assertEqual(len(s['round_history']),rnd);self.conserved(s)
-                if rnd<10:
-                    e.next_round(s,now,random.Random(rnd));e.tick(s,now+40)
-                else:self.assertEqual(s['status'],'match_results');self.assertTrue(s['winner_seats'])
 
-    def test_stale_turn(self):
-        s=self.game();seat=s['turn'];old=s['turn_id'];self.command(s,seat,'draw')
-        with self.assertRaises(ValueError):e.act(s,seat,'swap_drawn',{'turn_id':old,'slot':s['hands'][seat][0]['slot']},6)
+class SetupTests(SimpleTestCase):
+    def test_deal_and_piles(self):
+        for n in (2, 3, 4, 5, 6):
+            s = seated(n); e.start(s, 0, 0.0, random.Random(n))
+            self.assertEqual(len(s['cards']), 52)
+            self.assertEqual(len(set(card_ids(s))), 52)
+            self.assertTrue(all(len(h) == 4 for h in s['hands']))
+            self.assertEqual(len(s['discard_pile']), 1)
+            self.assertEqual(len(s['draw_pile']), 52 - 4 * n - 1)
+            self.assertEqual(s['status'], 'choose_reveal')
+            self.assertEqual(s['chooser'], 0)
 
-    def test_public_allowlist(self):
-        s=self.game(6)
-        for viewer in [None,*range(6)]:
-            view=e.public(s,viewer,10)
-            for key in ['cards','hands','draw_pile','discard_pile','commands','reserved','initial_peeks','jack_peeks']:self.assertNotIn(key,view)
-            self.assertFalse(any('id' in p or 'connections' in p for p in view['players']))
-            self.assertEqual(len(view['slots']),0 if viewer is None else 4)
+    def test_chooser_rotates_right(self):
+        s = seated(4); e.start(s, 0, 0.0, random.Random(1))
+        self.assertEqual(s['chooser'], 0)
+        # force to round_results then advance
+        for rnd in range(2, 5):
+            s['status'] = 'round_results'
+            e.next_round(s, 0.0, random.Random(rnd))
+            self.assertEqual(s['chooser'], (rnd - 1) % 4)
 
-    def layout(self,s,hands,top):
-        remaining=list(s['cards'])
-        def get(face):
-            cid=next(c for c in remaining if s['cards'][c]['rank']+s['cards'][c]['suit']==face);remaining.remove(cid);return cid
-        s['hands']=[[{'slot':f'slot-{i}-{j}','card':get(c)} for j,c in enumerate(h)] for i,h in enumerate(hands)]
-        s['discard_pile']=[get(top)];s['draw_pile']=remaining;s['reserved']=None;s['jack_peeks']={}
-        s['first_turn_done']=[True]*len(hands);s['status']='playing';s['phase']='normal_choice'
-        return s
+    def test_reveal_zero_starts_play_immediately(self):
+        s = seated(3); e.start(s, 0, 0.0, random.Random(2))
+        e.act(s, 0, 'choose_reveal', {'count': 0}, 0.0)
+        self.assertEqual(s['status'], 'playing')
+        self.assertEqual(s['turn'], s['chooser'])
 
-    def test_multi_cut_rank_and_stale_race(self):
-        s=self.layout(self.game(),[['2C','2D','2H','AC'],['3C'],['4C']],'2S');e.open_cut(s,5);old=s['cut_window']['event_id']
-        self.command(s,0,'cut',6,slots=[x['slot'] for x in s['hands'][0]][:3],event_id=old)
-        self.assertEqual(len(s['hands'][0]),1);self.assertEqual(s['turn'],0);self.conserved(s)
-        before=copy.deepcopy(s)
-        with self.assertRaises(ValueError):self.command(s,1,'cut',6,slots=[s['hands'][1][0]['slot']],event_id=old)
-        self.assertEqual(s,before)
+    def test_only_chooser_picks(self):
+        s = seated(3); e.start(s, 0, 0.0, random.Random(3))
+        with self.assertRaises(ValueError):
+            e.act(s, 1, 'choose_reveal', {'count': 2}, 0.0)
 
-    def test_bad_batch_single_unseen_penalty_and_turn(self):
-        s=self.layout(self.game(),[['2C','3C'],['4C'],['5C']],'2S');e.open_cut(s,5)
-        self.command(s,0,'cut',6,slots=[x['slot'] for x in s['hands'][0]],event_id=s['cut_window']['event_id'])
-        self.assertEqual(len(s['hands'][0]),3);self.assertEqual(s['turn'],0);self.assertEqual(e.public(s,0,6)['reveals'],{});self.conserved(s)
+    def test_select_then_shared_reveal(self):
+        s = seated(2); e.start(s, 0, 0.0, random.Random(4))
+        e.act(s, 0, 'choose_reveal', {'count': 2}, 0.0)
+        self.assertEqual((s['status'], s['phase']), ('initial_peek', 'select'))
+        chosen = [s['hands'][0][0]['slot'], s['hands'][0][1]['slot']]
+        e.act(s, 0, 'initial_peek', {'slots': chosen}, 1.0)
+        self.assertIn('0', s['initial_peeks'])
+        self.assertIsNone(s['peek_reveal_until'])            # no reveal until everyone selects
+        # seat 1 never selects; the 10 s select window passes -> auto-pick, then shared reveal
+        e.tick(s, 11.0, random.Random(5))
+        self.assertEqual(s['phase'], 'reveal')
+        self.assertIn('1', s['initial_peeks'])
+        self.assertTrue(e.public(s, 0, 11.0)['reveals'])     # everyone sees their own at once
+        self.assertFalse(e.public(s, 1, 11.0)['reveals'].keys() & e.public(s, 0, 11.0)['reveals'].keys())
+        e.tick(s, 15.0, random.Random(6))                    # reveal (3 s) ends -> play
+        self.assertEqual(s['status'], 'playing')
 
-    def test_last_jack_cut_ends_round_before_peek(self):
-        s=self.layout(self.game(),[['JC','JD'],['4C'],['5C']],'JS');e.open_cut(s,5)
-        self.command(s,0,'cut',6,slots=[x['slot'] for x in s['hands'][0]],event_id=s['cut_window']['event_id'])
-        self.assertEqual(s['status'],'round_results');self.assertEqual(s['scores'],[0,4,5]);self.assertFalse(s['jack_peeks']);self.assertIsNone(s['turn'])
-        self.assertEqual(s['final_turn_order'],[]);self.conserved(s)
+    def test_last_selector_starts_reveal_at_once(self):
+        s = seated(2); e.start(s, 0, 0.0, random.Random(7))
+        e.act(s, 0, 'choose_reveal', {'count': 1}, 0.0)
+        e.act(s, 0, 'initial_peek', {'slots': [s['hands'][0][0]['slot']]}, 0.5)
+        self.assertEqual(s['phase'], 'select')
+        e.act(s, 1, 'initial_peek', {'slots': [s['hands'][1][0]['slot']]}, 0.6)
+        self.assertEqual(s['phase'], 'reveal')               # last to choose triggers the reveal
 
-    def test_jack_one_second_private_and_not_replayable(self):
-        s=self.layout(self.game(),[['JC','3C'],['4C'],['5C']],'AS');s['turn']=0
-        self.command(s,0,'take_discard',5,slot=s['hands'][0][0]['slot'])
-        turn=s['turn'];handle=s['hands'][0][1]['slot']
-        self.command(s,0,'jack_peek',6,slot=handle)
-        self.assertIn(handle,e.public(s,0,6.99)['reveals']);self.assertEqual(e.public(s,1,6.5)['reveals'],{})
-        self.assertEqual(e.public(s,0,7)['reveals'],{});self.assertEqual(turn,s['turn'])
-        with self.assertRaises(ValueError):self.command(s,0,'jack_peek',6.5,slot=handle)
 
-    def test_scores_failed_successful_and_ties(self):
-        for hands,expected in [([['7C'],['9C'],['QC'],['KC','3C']],[7,18,12,16]),([['7C'],['5C'],['QC'],['KC','3C']],[7,0,12,16]),([['5D'],['5C'],['QC'],['KC','3C']],[5,0,12,16])]:
-            s=self.layout(self.game(4),hands,'AS');s['status']='dutch_final';e.finish(s,'dutch',1)
-            self.assertEqual(s['scores'],expected)
-            old=copy.deepcopy(s)
-            with self.assertRaises(ValueError):e.finish(s,'dutch',1)
-            self.assertEqual(old,s)
-        s=self.layout(self.game(2,{'dutch_ties_win':False}),[['5D'],['5C']],'AS');s['status']='dutch_final';e.finish(s,'dutch',1);self.assertEqual(s['scores'],[5,10])
+class TurnTests(SimpleTestCase):
+    def test_draw_enters_leftmost_then_keep_discards_an_original(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['2', '2', '2', '2']], draw_ranks=['9'])
+        original = s['hands'][0][0]['slot']
+        e.act(s, 0, 'draw', {'turn_id': s['turn_id']}, 0.0)
+        self.assertEqual(s['phase'], 'draw_reveal')
+        self.assertEqual(s['hands'][0][0]['slot'], s['reserved']['slot'])     # drawn sits leftmost
+        self.assertEqual(s['cards'][s['hands'][0][0]['card']]['rank'], '9')
+        self.assertEqual(len(s['hands'][0]), 5)
+        # keep the draw: discard an original card; the drawn card stays at leftmost
+        e.act(s, 0, 'swap_drawn', {'slot': original, 'turn_id': s['turn_id']}, 1.0)
+        self.assertEqual(s['cards'][s['discard_pile'][-1]]['rank'], 'A')
+        self.assertEqual(s['cards'][s['hands'][0][0]['card']]['rank'], '9')   # drawn kept, still leftmost
+        self.assertEqual(len(s['hands'][0]), 4)
+        self.assertEqual(s['turn'], 1)
+        self.assertTrue(s['first_turn_done'][0])
 
-    def test_recycle_and_unavailable_penalty_no_phantom_card(self):
-        s=self.game();s['discard_pile']=s['draw_pile']+s['discard_pile'];s['draw_pile']=[]
-        top=s['discard_pile'][-1];card=e.draw_card(s,random.Random(1));self.assertEqual(s['discard_pile'],[top]);s['draw_pile'].append(card);self.conserved(s)
-        s=self.layout(self.game(2),[['2C'],['3C']],'AS');s['hands'][1].extend({'slot':str(i),'card':c} for i,c in enumerate(s['draw_pile']));s['draw_pile']=[]
-        e.open_cut(s,5);old=copy.deepcopy(s)
-        with self.assertRaises(ValueError):self.command(s,0,'cut',6,slots=['slot-0-0'],event_id=s['cut_window']['event_id'])
-        self.assertEqual(s,old);self.conserved(s)
+    def test_discard_drawn_removes_leftmost(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['2', '2', '2', '2']], draw_ranks=['9'])
+        e.act(s, 0, 'draw', {'turn_id': s['turn_id']}, 0.0)
+        e.act(s, 0, 'discard_drawn', {'turn_id': s['turn_id']}, 1.0)
+        self.assertEqual(s['cards'][s['discard_pile'][-1]]['rank'], '9')      # the drawn card itself
+        self.assertEqual(len(s['hands'][0]), 4)
+        self.assertTrue(all(s['cards'][x['card']]['rank'] == 'A' for x in s['hands'][0]))
 
-    def test_seeded_random_legal_play_conserves_cards(self):
-        for n in range(2,7):
-            rng=random.Random(n);s=self.game(n);now=20
-            for _ in range(160):
-                now+=15;e.tick(s,now)
-                if s['status'] in e.RESULTS:break
-                seat=s['turn'];handle=rng.choice(s['hands'][seat])['slot']
-                if s['cut_window']:continue
-                if all(s['first_turn_done']) and not s['jack_peeks'] and rng.random()<.08:self.command(s,seat,'call',now)
-                elif rng.random()<.5 and (s['draw_pile'] or len(s['discard_pile'])>1):
-                    self.command(s,seat,'draw',now);self.command(s,seat,'swap_drawn',now+3,slot=handle)
-                else:self.command(s,seat,'take_discard',now,slot=handle)
-                self.conserved(s)
+    def test_take_discard_swaps(self):
+        s = rigged([['K', 'K', 'K', 'K'], ['3', '3', '3', '3']], discard='7')
+        target = s['hands'][0][0]['slot']
+        e.act(s, 0, 'take_discard', {'slot': target, 'turn_id': s['turn_id']}, 0.0)
+        self.assertEqual(s['cards'][e.slot(s, 0, target)['card']]['rank'], '7')
+        self.assertEqual(s['cards'][s['discard_pile'][-1]]['rank'], 'K')
+        self.assertEqual(s['turn'], 1)
 
-    def test_configuration_changes_are_frozen_and_honored(self):
-        s=self.game(2,{'direction':-1,'peek_min':2,'peek_max':2,'initial_peek_seconds':1})
-        self.assertEqual(s['peek_counts'],[2,2]);self.assertEqual(e.next_seat(s,0),1)
-        self.assertEqual(s['rules']['initial_peek_seconds'],1)
+    def test_timeout_before_draw_skips(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['2', '2', '2', '2']])
+        e.tick(s, 31.0)
+        self.assertTrue(s['first_turn_done'][0])
+        self.assertEqual(s['turn'], 1)
 
-    def test_final_swap_can_overtake_caller_and_rejects_second_call(self):
-        s=self.layout(self.game(2),[['5C'],['9C']],'AC');s['turn']=0
-        self.command(s,0,'call',5)
-        with self.assertRaises(ValueError):self.command(s,1,'call',6)
-        self.command(s,1,'take_discard',6,slot=s['hands'][1][0]['slot'])
-        self.assertEqual(s['scores'],[10,1]);self.assertFalse(s['round_result']['success'])
+    def test_timeout_after_draw_autodiscards_no_power(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['2', '2', '2', '2']], draw_ranks=['J'])
+        e.act(s, 0, 'draw', {'turn_id': s['turn_id']}, 0.0)
+        e.tick(s, 31.0)
+        self.assertEqual(s['cards'][s['discard_pile'][-1]]['rank'], 'J')
+        self.assertEqual(len(s['hands'][0]), 4)         # drawn leftmost removed
+        self.assertIsNone(s['power'])                   # auto-discarded Jack grants no power
+        self.assertEqual(s['turn'], 1)
 
-    def test_match_tie_and_no_eleventh_round(self):
-        s=self.layout(self.game(2),[['5C'],['5D']],'AC');s['round']=10;s['scores']=[5,0]
-        e.finish(s,'dutch',0)
-        self.assertEqual(s['scores'],[5,5]);self.assertEqual(s['winner_seats'],[0,1])
-        with self.assertRaises(ValueError):e.next_round(s,10)
 
-    def test_initial_timeout_and_foreign_slot(self):
-        s=e.new_state(2,'a','A',0)
-        for i in range(2):s['players'][i]={'id':str(i),'name':str(i),'ready':True,'connected':True}
-        e.start(s,0,0,random.Random(4))
-        with self.assertRaises(ValueError):self.command(s,0,'initial_peek',1,slots=[s['hands'][1][0]['slot']])
-        e.tick(s,31);self.assertEqual(s['status'],'playing');self.assertTrue(all(s['initial_peeks_done']))
-        self.assertEqual(e.public(s,0,31)['reveals'],{})
+class PowerTests(SimpleTestCase):
+    def test_jack_peek_then_advances(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['2', '2', '2', '2']], draw_ranks=['J'])
+        e.act(s, 0, 'draw', {'turn_id': s['turn_id']}, 0.0)
+        e.act(s, 0, 'discard_drawn', {'turn_id': s['turn_id']}, 1.0)
+        self.assertEqual(s['power']['kind'], 'jack')
+        own = s['hands'][0][0]['slot']
+        e.act(s, 0, 'jack_peek', {'slot': own}, 1.0)
+        pub = e.public(s, 0, 1.0)
+        self.assertIn(own, pub['reveals'])  # owner sees it for 1s
+        self.assertNotIn(own, e.public(s, 1, 1.0)['reveals'])  # opponent does not
+        e.tick(s, 2.5)
+        self.assertIsNone(s['power'])
+        self.assertEqual(s['turn'], 1)
+
+    def test_queen_swaps_cards_between_hands(self):
+        s = rigged([['A', '5', '5', '5'], ['9', '2', '2', '2']], draw_ranks=['Q'])
+        own = s['hands'][0][0]['slot']; opp = s['hands'][1][0]['slot']
+        e.act(s, 0, 'draw', {'turn_id': s['turn_id']}, 0.0)
+        e.act(s, 0, 'discard_drawn', {'turn_id': s['turn_id']}, 1.0)
+        e.act(s, 0, 'queen_swap', {'own_slot': own, 'target_seat': 1, 'target_slot': opp}, 1.0)
+        self.assertEqual(s['cards'][e.slot(s, 0, own)['card']]['rank'], '9')
+        self.assertEqual(s['cards'][e.slot(s, 1, opp)['card']]['rank'], 'A')
+        self.assertEqual(s['turn'], 1)
+
+    def test_king_lock_makes_face_public_and_blocks_swap(self):
+        s = rigged([['A', '5', '5', '5'], ['9', '2', '2', '2']], draw_ranks=['K'])
+        own = s['hands'][0][1]['slot']
+        e.act(s, 0, 'draw', {'turn_id': s['turn_id']}, 0.0)
+        e.act(s, 0, 'discard_drawn', {'turn_id': s['turn_id']}, 1.0)
+        e.act(s, 0, 'king_lock', {'target_seat': 0, 'target_slot': own, 'mode': 'lock'}, 1.0)
+        self.assertTrue(e.slot(s, 0, own)['locked'])
+        # locked face is public to everyone
+        self.assertIsNotNone(next(c for c in e.public(s, 1, 1.0)['hands'][0] if c['slot'] == own)['face'])
+        # cannot swap or take-discard into a locked slot
+        s['turn'] = 0; s['phase'] = 'normal_choice'; s['reserved'] = None; s['power'] = None
+        s['turn_id'] += 1; s['turn_deadline'] = 40
+        with self.assertRaises(ValueError):
+            e.act(s, 0, 'take_discard', {'slot': own, 'turn_id': s['turn_id']}, 2.0)
+
+    def test_king_cannot_lock_dutch_caller(self):
+        s = rigged([['A', '5', '5', '5'], ['9', '2', '2', '2']], draw_ranks=['K'])
+        s['dutch_caller'] = 1
+        e.act(s, 0, 'draw', {'turn_id': s['turn_id']}, 0.0)
+        e.act(s, 0, 'discard_drawn', {'turn_id': s['turn_id']}, 1.0)
+        with self.assertRaises(ValueError):
+            e.act(s, 0, 'king_lock', {'target_seat': 1, 'target_slot': s['hands'][1][0]['slot'], 'mode': 'lock'}, 1.0)
+
+
+class CutTests(SimpleTestCase):
+    def test_locked_until_first_turns(self):
+        s = rigged([['2', 'A', 'A', 'A'], ['2', '3', '3', '3']], discard='2', unlocked=False)
+        s['cut_window'] = None
+        with self.assertRaises(ValueError):
+            e.act(s, 1, 'cut', {'slot': s['hands'][1][0]['slot'], 'event_id': 'x'}, 0.0)
+
+    def test_successful_cut_takes_turn(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['2', '3', '3', '3']], discard='2')
+        e.open_cut(s)
+        ev = s['cut_window']['event_id']; cut_slot = s['hands'][1][0]['slot']
+        e.act(s, 1, 'cut', {'slot': cut_slot, 'event_id': ev}, 0.0)
+        self.assertEqual(len(s['hands'][1]), 3)
+        self.assertEqual(s['turn'], 1)
+        self.assertEqual(s['cards'][s['discard_pile'][-1]]['rank'], '2')
+
+    def test_failed_cut_penalty_and_turn_unchanged(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['9', '3', '3', '3']], discard='2', draw_ranks=['6'])
+        e.open_cut(s); ev = s['cut_window']['event_id']
+        before = len(s['hands'][1]); bad = s['hands'][1][0]['slot']
+        e.act(s, 1, 'cut', {'slot': bad, 'event_id': ev}, 0.0)
+        self.assertEqual(len(s['hands'][1]), before + 1)      # one penalty card
+        self.assertIsNotNone(s['cut_reveal'])                 # public reveal
+        self.assertEqual(s['turn'], 0)                        # order unchanged
+        e.tick(s, 2.5)
+        self.assertIsNone(s['cut_reveal'])
+
+    def test_empty_hand_cut_ends_round(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['2']], discard='2')
+        e.open_cut(s); ev = s['cut_window']['event_id']
+        e.act(s, 1, 'cut', {'slot': s['hands'][1][0]['slot'], 'event_id': ev}, 0.0)
+        self.assertEqual(s['status'], 'round_results')
+        self.assertEqual(s['round_result']['reason'], 'empty_cut')
+        self.assertEqual(s['round_result']['earned'][1], 0)
+
+    def test_cannot_cut_locked_card(self):
+        s = rigged([['A', 'A', 'A', 'A'], ['2', '3', '3', '3']], discard='2')
+        s['hands'][1][0]['locked'] = True
+        e.open_cut(s); ev = s['cut_window']['event_id']
+        with self.assertRaises(ValueError):
+            e.act(s, 1, 'cut', {'slot': s['hands'][1][0]['slot'], 'event_id': ev}, 0.0)
+
+
+class DutchTests(SimpleTestCase):
+    def test_call_builds_final_order(self):
+        s = rigged([['A', 'A'], ['5', '5'], ['6', '6']], discard='2')
+        e.act(s, 0, 'call', {'turn_id': s['turn_id']}, 0.0)
+        self.assertEqual(s['status'], 'dutch_final')
+        self.assertEqual(s['final_turn_order'], [1, 2])
+        self.assertEqual(s['turn'], 1)
+
+    def test_successful_dutch_scores_zero(self):
+        s = rigged([['A', 'A'], ['9', '9'], ['9', '9']], discard='2')  # caller total 2, others 18
+        e.act(s, 0, 'call', {'turn_id': s['turn_id']}, 0.0)
+        # each opponent takes a trivial turn (draw+discard same via timeout skip)
+        e.tick(s, 31.0); e.tick(s, 62.0)
+        self.assertEqual(s['status'], 'round_results')
+        self.assertEqual(s['round_result']['earned'][0], 0)
+        self.assertTrue(s['round_result']['success'])
+
+    def test_tie_fails_doubles_caller(self):
+        s = rigged([['3', '4'], ['7'], ['9']], discard='2')  # caller total 7, opp1 total 7 -> tie fails
+        e.act(s, 0, 'call', {'turn_id': s['turn_id']}, 0.0)
+        e.tick(s, 31.0); e.tick(s, 62.0)
+        self.assertFalse(s['round_result']['success'])
+        self.assertEqual(s['round_result']['earned'][0], 14)
+
+    def test_no_cut_during_final(self):
+        s = rigged([['A', 'A'], ['2', '5'], ['6', '6']], discard='2')
+        e.act(s, 0, 'call', {'turn_id': s['turn_id']}, 0.0)
+        with self.assertRaises(ValueError):
+            e.act(s, 1, 'cut', {'slot': s['hands'][1][0]['slot'], 'event_id': 'x'}, 1.0)
+
+
+class MatchTests(SimpleTestCase):
+    def test_tenth_round_finishes_match(self):
+        s = rigged([['2'], ['9']], discard='2')
+        s['round'] = 10
+        e.open_cut(s); ev = s['cut_window']['event_id']
+        e.act(s, 0, 'cut', {'slot': s['hands'][0][0]['slot'], 'event_id': ev}, 0.0)
+        self.assertEqual(s['status'], 'match_results')
+        self.assertEqual(s['winner_seats'], [0])
+
+    def test_conservation_through_a_round(self):
+        s = seated(3); e.start(s, 0, 0.0, random.Random(99))
+        e.act(s, 0, 'choose_reveal', {'count': 1}, 0.0)
+        e.tick(s, 11.0, random.Random(1))   # select window closes -> auto-pick + shared reveal
+        e.tick(s, 15.0, random.Random(1))   # reveal ends -> play
+        self.assertEqual(s['status'], 'playing')
+        self.assertEqual(len(set(card_ids(s))), 52)
+
+
+class ProjectionTests(SimpleTestCase):
+    def test_opponent_faces_hidden(self):
+        s = rigged([['A', 'K', '5', '7'], ['2', '3', '9', 'Q']], discard='2')
+        pub = e.public(s, 0, 0.0)
+        self.assertTrue(all(c['face'] is None for c in pub['hands'][1]))  # opponent hidden
+        self.assertTrue(all(c['face'] is None for c in pub['hands'][0]))  # own also hidden (no active peek)
+        self.assertEqual(pub['counts'], [4, 4])
+        self.assertNotIn('cards', pub)
+        self.assertNotIn('draw_pile', pub)
+
+    def test_round_end_reveals_all(self):
+        s = rigged([['A'], ['9']], discard='A')
+        e.open_cut(s); ev = s['cut_window']['event_id']
+        e.act(s, 0, 'cut', {'slot': s['hands'][0][0]['slot'], 'event_id': ev}, 0.0)
+        pub = e.public(s, 1, 0.0)
+        self.assertEqual(s['status'], 'round_results')
+        self.assertIsNotNone(pub['round_result'])
+
+class AnimationProjectionTests(SimpleTestCase):
+    def test_final_cut_keeps_only_public_motion_metadata(self):
+        s=rigged([['2'],['3']],discard='2');e.open_cut(s)
+        e.act(s,0,'cut',{'slot':'s0_0','event_id':s['cut_window']['event_id']},1)
+        view=e.public(s,None,1)
+        self.assertEqual(view['event']['kind'],'round.finished')
+        self.assertEqual(view['event']['last_move'],{'kind':'cut.accepted','seat':0,'slot':'s0_0'})
+        self.assertEqual(view['status'],'round_results')
+    def test_failed_cut_face_expires_without_a_timer_tick(self):
+        s=rigged([['3'],['4']],discard='2',draw_ranks=['5']);e.open_cut(s)
+        e.act(s,0,'cut',{'slot':'s0_0','event_id':s['cut_window']['event_id']},1)
+        self.assertIsNotNone(e.public(s,None,2.99)['cut_reveal'])
+        self.assertIsNone(e.public(s,None,3)['cut_reveal'])
