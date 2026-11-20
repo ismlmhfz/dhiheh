@@ -1,48 +1,54 @@
-# Dutch implementation validation
+# Dutch reimplementation — validation status
 
-Implemented separately from 10. No production files, database, service, proxy or
-certificate configuration were changed. The live site was not deployed/restarted.
+Full-stack reimplementation of Dutch to `RULES_DUTCH.md`, inside the existing
+isolation boundary. The 10 Card Club game, its engine, service, consumer,
+templates, styles and tests are unchanged. No production deploy.
 
-## Automated verification
+## Automated tests — green
 
-- Baseline before changes: all **59 existing Django tests passed**.
-- Integrated PostgreSQL suite: **92 tests passed**, including the original 59,
-  engine/service/socket tests and three real database-lock concurrency tests.
-- Final targeted PostgreSQL run after additional edge coverage: **36 Dutch tests
-  passed**. This includes three additional cases: a final swap overtaking a Dutch
-  caller, a shared match win with no eleventh round, and initial-peek timeout/
-  foreign-slot rejection.
-- Chromium: **six players, ten complete rounds**, final scoreboard, rematch;
-  no JavaScript exceptions or page-width overflow at 320px.
-- WebKit: **two players, ten complete rounds**, final scoreboard, rematch;
-  no JavaScript exceptions or page-width overflow at 320px.
-- Firefox: deterministic UI checks passed for three matching cards in one cut,
-  a mixed-rank batch receiving exactly one hidden penalty, a private one-second
-  Jack peek, and a last-card Jack cut ending immediately with no final turns.
-- Chromium with every WebSocket connection forcibly closed: HTTP fallback passed
-  readiness, start, initial peeks, private draw, reload after reveal expiry,
-  mandatory swap without another reveal, room chat and automatic chat dismissal.
-- Browser matches checked spectator projections, both draw sources, exactly N−1
-  final turns, round history and chat. Database tests cover all 2–6 capacities,
-  stale/replayed commands, card conservation, CSRF, cross-game routes, private
-  snapshots, invitation expiry and disconnect handling.
+`python manage.py test` (SQLite, Python 3.14 + Django 5.2):
 
-Browser tests use an isolated SQLite database and localhost Daphne instance.
-Concurrency tests use an automatically created/destroyed PostgreSQL test database
-and deliberately bypass the per-process mutex, exercising row locks directly.
-Playwright WebKit validates the WebKit engine, not a physical iPhone/Safari device.
+- **118 passed, 3 skipped** (the PostgreSQL row-lock concurrency tests skip on SQLite).
+- Baseline before the rewrite was 95 tests; the suite grew with new Dutch coverage.
+- All pre-existing **10 Card Club tests still pass**, confirming the isolation boundary held.
 
-## Review and later deployment
+New / rewritten Dutch suites:
 
-- Rules awaiting owner confirmation are labelled in the in-game rules dialog and
-  centralized in `game/dutch_rules.py`; the original specification is preserved
-  in `DUTCH_IMPLEMENTATION.md`.
-- Existing 10 engine/service/consumer/game JS/CSS are unchanged. Integration adds
-  a navigation link, Dutch routes, a cross-game boundary guard and the correct
-  admin spectator link for Dutch rooms.
-- No schema migration is required. Shared PostgreSQL/Redis are used by the existing
-  production configuration; use a shared Django cache for aggregate HTTP rate
-  limits when running multiple HTTP workers.
-- Dutch bots, voice/video and native group-match creation are optional future
-  work, not part of this human-multiplayer milestone.
-- Production deployment is intentionally excluded by the supplied specification.
+- `game/test_dutch_rules.py` (11) — config validation: ranges, types, unknown-key rejection, frozen copies, flipped tie/failed-cut defaults, enum guards.
+- `game/test_dutch_engine.py` (26) — setup/chooser rotation/reveal 0–4, starting peek + timeout auto-pick, 30 s turn timer (skip before draw, auto-discard-no-power after), draw+swap / take-discard, Jack/Queen/King powers incl. locked-card and Dutch-caller guards, event-based single cut (success takes turn, failed cut penalty + 2 s public reveal + turn unchanged, empty-hand ends round), Dutch final order, **tie-fails** 2× and strict-lowest 0, 10th-round match end, card conservation, projection privacy.
+- `game/test_dutch_service.py` (17) — lobby/host/dedup, start→choose_reveal flow, idempotent draw + 3 s preview expiry on resync, **no-pause** on disconnect, **all-idle abandon** after a full turn cycle, long-absence abandon on return, chat/isolation/CSRF/poll/watch projection, invite expiry, rematch resets scores.
+- `game/test_dutch_ws.py` (2) — real Channels consumers: private timers, per-seat redaction (no `cards`/`draw_pile`/`commands`, opponent faces `null`), spectator action rejection, chat, reconnect hides expired peeks.
+- `game/test_dutch_concurrency.py` (3, PostgreSQL only) — single-claim cut race, duplicate-draw dedup, racing swaps; updated to the new single-card cut API and forced-playing setup.
+
+Other checks run here: `GET /dutch/` renders 200 with the new rules config and UI
+elements embedded; `node --check static/dutch/dutch.js` passes; no dangling
+references to removed dialogs/fields remain in the client.
+
+## Browser scripts — rewritten for the new flow (need a browser to run)
+
+`tests/dutch_browser.py`, `tests/dutch_browser_edges.py`, `tests/dutch_browser_reconnect.py`
+and `tests/dutch_fixture.py` have been **rewritten** for the current rules and UI:
+rotating chooser pick, synchronized blind-select → shared 3 s reveal, draw-enters-leftmost
+(tap a card to discard), **double-tap-to-cut**, single/failed/empty-hand cut, King-lock via
+draw+discard, N−1 Dutch final turns, 10-round scoreboard and rematch. They are
+syntax-valid but **have not been executed here** (no Playwright/browser in this environment)
+— run them against an isolated dev server to confirm.
+
+```bash
+DUTCH_BASE_URL=http://127.0.0.1:8097 python tests/dutch_browser.py
+```
+
+## Still needs a human: manual multi-browser playthrough
+
+Open 2–6 browser profiles and play a full match. The engine/service paths are
+unit/integration-tested, but the **live browser interactions and animations are not yet
+exercised by a person.**
+
+## How to validate interactively
+
+```bash
+.venv/Scripts/python manage.py runserver 127.0.0.1:8000
+# open http://127.0.0.1:8000/dutch/ in 2+ browser profiles, create + join a table
+```
+
+Report any UI issue found and it can be fixed against this build.

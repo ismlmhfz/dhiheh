@@ -1,423 +1,305 @@
-DUTCH — Implementation specification for ismlmhfz/dhiheh
-Repository: https://github.com/ismlmhfz/dhiheh
-Target: Add a fully playable, server-authoritative, real-time Dutch card game for 2–6 individual players, without modifying or breaking the existing 10 Card Club game.
-Document status: Implementation-ready specification based on the rules supplied by the game owner. Any unconfirmed choices are labelled [IMPLEMENTATION DEFAULT — CONFIRM], and must be kept configurable rather than presented as definitive rules.
+DUTCH — Implementation plan (reimplementation)
 
-1. Mission and integration constraints
-Implement Dutch as an additional game that players can select, create, join, play, spectate (without seeing secrets), and finish over 10 rounds on desktop and mobile. Keep the existing 10 Card Club functionality available and unchanged.
-Verified repository architecture (main branch, inspected 2026-11-18)
-- Backend: Django 5.2-compatible Python application, Django Channels/ASGI, room state in Room.state JSON; SQLite local, PostgreSQL + Redis recommended in production.
-- Existing rules: game/engine.py implements the four-player team game "10" with 13-card hands and trick-taking. Do not replace this engine or reuse its trick logic for Dutch.
-- Room and mutations: game/service.py manages rooms, player identity, seating, bots, transactions, command deduplication, and lifecycle. Its four-player assumptions mean it must not be used unchanged for Dutch gameplay.
-- WebSockets: game/consumer.py broadcasts updates over /ws/room/<code>/; ten/asgi.py sets up channel routing.
-- REST: game/views.py exposes /api/<action>/; ten/urls.py contains URL routing.
-- UI: templates/index.html, static/app.js, static/game.css, static/table.css, static/mobile.css implement the 10 table. Avoid mixing Dutch card rules into these files.
-- Shared services: game/models.py contains Room, ChatMessage, social models. game/chat.py, account/profile code, invitations and spectators may be reused carefully.
-- Known existing four-player assumptions: game/service.py enforces four seated players, teams and opposite seating; game/consumer.py voice recipient validation uses range(4); game/spectator.py exposes 10-specific fields; existing static/app.js renders 4 directional seats; game/invitations.py refers to four empty seats when state is missing. All must be audited before shared usage.
-- Tests: existing Django tests under game/tests.py and game/test_*.py must continue to pass.
-- Deployment: repository README.md says pushing source does not automatically deploy the production website.
-Preferred implementation architecture
-Create a separate Dutch implementation that reuses Room, session identity, database, Channels layer, CSRF protection, login, safe chat primitives, and styling tokens, but isolates Dutch's rules and private player state.
+Repository: ismlmhfz/dhiheh
+Target: Rebuild the Dutch card game end-to-end to match the current `RULES_DUTCH.md`, as a full-stack reimplementation that stays inside the existing isolation boundary and does not touch the 10 Card Club game.
 
-Suggested file additions:
-game/
-  dutch_engine.py          # Pure, deterministic Dutch rules and scoring
-  dutch_service.py         # Atomic room mutations, permissions and game lifecycle
-  dutch_consumer.py        # Dutch websocket action routing and seat-scoped snapshots
-  dutch_views.py           # Dutch landing, table and POST API
-  dutch_bots.py            # Optional, milestone 2; uses only bot-visible information
-  test_dutch_engine.py     # Pure rules, fuzz/property-style and edge tests
-  test_dutch_service.py    # Concurrency, permissions, persistence and API tests
-  test_dutch_ws.py         # WebSocket snapshots and timer tests
+Document status: `RULES_DUTCH.md` is the single source of truth for game rules and table UI. This file is the engineering plan: it does not restate the rules, it says how to build them. Anything marked **[DEFAULT — CONFIRM]** mirrors a default in `RULES_DUTCH.md` and must live in the one configurable rule object, never presented as a confirmed rule.
 
-templates/dutch/
-  index.html               # Dutch lobby, game table and rules
+---
 
-static/dutch/
-  dutch.js                 # Network, render, card selection, timed reveals
-  dutch.css                # Responsive 2–6 seat tabletop, piles and scoreboard
-Routes, names and classes can vary if the implementation is coherent. Suggested paths:
-GET  /dutch/                       Dutch home / new table
-GET  /dutch/room/<ROOM_CODE>/       Join or resume the Dutch table
-POST /dutch/api/create/            Create Dutch room
-POST /dutch/api/<action>/          Join, lobby management and fallback actions
-WS   /ws/dutch/<ROOM_CODE>/        Authoritative Dutch real-time channel
-Do not redirect existing /room/<code>/ or /ws/room/<code>/ traffic into Dutch. Assign Room.state['game_type'] = 'dutch' and enforce it in the Dutch route, consumer and service. Existing rooms without game_type default to ten; don't rewrite their stored states. Optionally add a Play Dutch choice on the existing landing page once the standalone mode works.
+## 1. Mission and integration constraints
 
-If extracting truly shared room utilities from game/service.py, do so with regression tests and without altering the current 10 Card Club behavior. It is acceptable for v1 to keep a small, explicit Dutch-specific lobby service to reduce regression risk.
-2. Authoritative game rules
-2.1 Setup
-1. Players: 2–6, individual play. There are no teams.
-2. Use a standard 52-card deck, four suits, ranks A,2,3,4,5,6,7,8,9,10,J,Q,K, with no jokers by default.
-3. Shuffle using a server-side cryptographically secure RNG. Deal four cards face down to each player, in fixed visually identifiable slots.
-4. Place the next undealt card face up as the first card in a discard pile at the middle. All other undealt cards form the face-down draw pile. These are the only two central piles.
-5. At the beginning of a match, randomly select the number of starting cards that each player is allowed to inspect privately. The server determines the number, and players select which of their own card positions to view. After inspection, they become face down again. This does not remove or swap any cards.
-6. Randomly choose the starting player. Other players follow a consistent rotation order.
-7. Players must complete their starting peek phase before gameplay begins; no one is allowed to see another player's private reveals.
-[IMPLEMENTATION DEFAULT — CONFIRM] Starting peek count is one shared random integer from 1 through 4 per match (rather than a separate count for each player, and rather than rerolling each round). Starting peek duration: 3 seconds after the cards are selected. Both are configurable. The rule owner has confirmed only that the initial number is randomized, not the random range, per-player behavior, or initial peek duration. Do not treat these defaults as original game rules.
+Replace the existing Dutch engine, service, consumer, views, templates, styles and tests with a new implementation of the consolidated rules, while keeping the 10 Card Club game byte-for-byte unchanged. This is a rewrite of Dutch behaviour, not of the shared platform.
 
-[IMPLEMENTATION DEFAULT — CONFIRM] Use clockwise turn order, since direction has not been specified for Dutch. Current 10 Card Club uses counterclockwise turns; do not automatically transfer that rule to Dutch.
-2.2 Normal turns — take and swap
-The active player must choose one of two sources:
-- Face-up pile: take the currently visible top card from the discard pile and swap it with one selected face-down card from their own hand. Put the displaced hand card face up on the discard pile.
-- Face-down pile: draw the top hidden card, privately view it for exactly 2 seconds, then select one hand-card position to replace with it. Put the displaced hand card face up on the discard pile. Hide the drawn card face again after the 2-second preview, even if the player has not yet selected a replacement slot.
-The player's hand-card positions remain stable unless explicitly removed by cutting. The replaced card is always publicly discarded. This is a required swap: the initial implementation must not add a third option to draw and discard the drawn card without replacing a hand card, since that has not been specified.
+Hard constraints (unchanged from the current build):
+- **Isolation boundary stays.** Dutch rooms are `Room.state['game_type'] == 'dutch'`. Routes live under `/dutch/…`; the WebSocket is `ws/dutch/<code>/`. `dutch_views.TenIsolationMiddleware` and `dutch_consumer.IsolatedTenConsumer` must continue to reject cross-game room codes before any 10 code runs. Do not route `/room/` or `/ws/room/` traffic into Dutch.
+- **Shared platform is reused, not forked.** Reuse `Room`, session identity (`service.identity`, `seat_of`, the `@serialized` mutex), the Channels layer, CSRF, login, `chat.py` room chat, and brand/style tokens. Do not import or modify `game/engine.py` or `game/service.py` mutation logic for Dutch gameplay.
+- **Server is authoritative.** All cards, deadlines and powers live only in `Room.state`; clients receive an individually redacted projection. Never ship hidden faces and hide them with CSS.
+- **No schema migration.** Dutch keeps using the existing `Room` JSON and the room-chat model. `schema_version` in state covers Dutch shape changes.
+- **No production deploy** as part of this work.
 
-Important UX: A player can see a card's actual value during a valid peek, but at all other times cards in their own hand display backs. The client is expected to help the human remember the cards, not to permanently label previously peeked values.
+Files in scope (rewrite):
+```
+game/dutch_engine.py      # pure rules/state machine — the bulk of the change
+game/dutch_rules.py       # the single configurable rule object + validation
+game/dutch_service.py     # atomic room lifecycle, presence, action dispatch
+game/dutch_consumer.py    # WebSocket routing + per-seat snapshots
+game/dutch_views.py       # landing/table/API + isolation middleware (middleware unchanged)
+templates/dutch/index.html
+static/dutch/dutch.js
+static/dutch/dutch.css
+game/test_dutch_engine.py
+game/test_dutch_service.py
+game/test_dutch_ws.py
+game/test_dutch_concurrency.py
+```
+Out of scope for this milestone: Dutch bots, Dutch voice, and native group-match creation (those remain future work; see §15).
 
-The server owns drawn cards, swaps, time windows, and validation. Never trust a client-submitted card rank or value.
-2.3 Unlock conditions
-Cutting and calling Dutch are locked until every seated player has completed their first turn of the current round. Track completion by player/seat, not a global fixed count, since a cut may alter turn order after the unlock. Both mechanisms become available after all have acted once.
+**Approach: hybrid, not greenfield.** `dutch_engine.py` and `dutch_rules.py` are rewritten from scratch — the new ruleset diverges too far to patch cleanly. `dutch_service.py`, `dutch_consumer.py`, `dutch_views.py` and the front-end are evolved in place: their platform integration (lobby lifecycle, lease-based presence, atomic `mutate`, per-seat projection plumbing, isolation guards, dialog structure, render loop) is already correct and tested, and re-deriving it would be slower and riskier than extending it.
 
-[IMPLEMENTATION DEFAULT — CONFIRM] A Dutch call is allowed on the caller's own normal turn (instead of drawing/swapping), only when there are no unresolved cuts or card previews. The owner specified when Dutch becomes available, but did not specify whether it may be called outside one's own turn. Keep this policy configurable.
-2.4 Cutting: discard matching ranks
-Once cutting is unlocked, any player, including a player whose normal turn it is not, may attempt a cut immediately after a card is discarded on the central face-up pile.
-- A cut matches the rank only, regardless of suit. Example: discarding 2H lets a player cut their known 2C.
-- The cutting player selects one or several cards from their hand (a multi-cut). They may cut as many cards as they have that match the current discard rank.
-- Success: every selected matching card leaves that player's hand and is added to the face-up pile. The hand shrinks permanently. The cutting player becomes the next active player, interrupting the previous turn order.
-- Failure: if a player tries to cut a card of the wrong rank, add one extra card face down from the draw pile to their hand. They must not view the penalty card.
-- When a player successfully cuts away every remaining card, the round ends immediately, without giving anyone else a final turn. That player wins the round with 0 points. Every other player reveals and scores the total value of their remaining cards.
-- The cut option is completely disabled during the final-turn period after a Dutch call.
-[IMPLEMENTATION DEFAULT — CONFIRM] Treat a multi-cut as one atomic action: if every selected rank matches the current discard, remove all; if any selected card does not match, remove none and issue one penalty card (not one penalty per wrong card). A failed cutter becomes the next active player as with a successful cut. These exact batch-failure and failed-cut turn-transition behaviors were not separately confirmed; keep them configurable.
+## 2. What changes from the current build
 
-[IMPLEMENTATION DEFAULT — CONFIRM] Allow a single authoritative cut claim per discard event during a server-timed 3-second cut window. The first validly received command wins the race; others receive a harmless 'window closed' response. A player may make additional cuts at later discard opportunities. Successful cuts of matching cards may trigger a fresh cut window for the latest discarded card, unless the hand becomes empty. Avoid simultaneous owners or more than one accepted cut against a stale discard event.
-2.5 Jack's special power
-When a Jack (J) is placed on the face-up discard pile, the player who placed it there receives a private 1-second peek at one chosen card in their own hand.
-- The Jack trigger is about a card being discarded, not about drawing or holding a Jack.
-- The 1-second peek never reveals any other player's cards.
-- The card returns face down after 1 second, and the peek does not itself constitute a swap or cut.
-- Any card position selected must currently exist in the player's hand. If the round has ended, pending Jack peeks expire.
-- The ability does not alter turn order and cannot override a round-ending empty-hand cut.
-[IMPLEMENTATION DEFAULT — CONFIRM] Trigger the Jack power for a Jack discarded by a normal swap and for a Jack successfully cut onto the pile. A Jack discarded during the Dutch final-swap period may still grant its normal 1-second peek (it is an incidental card effect, not an additional cut or swap). The exact scope of Jack effects has not been specified in more detail; keep it configurable.
-2.6 Calling Dutch
-After all players have completed at least one turn in the round, an eligible player may declare DUTCH because they believe their remaining hand total is the lowest.
-1. The caller's participation in the round ends immediately; the caller receives no final turn.
-2. Every other player gets exactly one final turn, taken in rotation order after the caller, and may only perform a normal take-and-swap using one of the two middle piles.
-3. No player can cut during this final-turn phase; cutting buttons and server actions must be disabled.
-4. After the last other player completes the final swap, reveal all remaining hands and score the round.
-5. If the caller has the lowest hand total, the caller scores 0 points, regardless of their actual hand total.
-6. If another player has a lower total, the caller's own remaining hand total is doubled for that round. All other players score their unmodified hand totals.
-7. A Dutch call cannot be cancelled or repeated within the same round.
-[IMPLEMENTATION DEFAULT — CONFIRM] If the caller is tied for lowest, count the call as successful (zero points). The original rules specify "lowest" but do not say how ties are handled. Make this a settings switch.
+The current Dutch engine implements an older ruleset. The new rules differ in core mechanics — treat these as the checklist of what to tear out and rebuild:
 
-No cuts means no empty-hand cut victory in the Dutch final-turn phase. The round instead completes after all required final swaps.
-2.7 Rounds and overall victory
-- A match consists of exactly 10 rounds.
-- Every round ends either by completed Dutch final turns or immediately when a player cuts their last card.
-- For an empty-hand cut, cutter = 0 points, everyone else = face-value sum of cards still held.
-- For a successful Dutch call, caller = 0 points, everyone else = face-value sum.
-- For a failed Dutch call, caller = 2 × their own face-value sum, everyone else = face-value sum.
-- Cumulative scores carry through all 10 rounds, including penalty points from failed Dutch calls.
-- After round 10, the player(s) with the lowest cumulative score win the match; display all players' results and a clear Play Again option.
-[IMPLEMENTATION DEFAULT — CONFIRM] Card point values: A=1, 2–10 as printed, J=11, Q=12, K=13. The owner has not yet specified these values. Centralize the mapping in a configurable rule constant, and display the mapping in the in-app rules rather than hardcoding different values across backend and frontend.
+| Area | Current build | New rules (`RULES_DUTCH.md`) |
+|---|---|---|
+| Reveal count | Server picks a random shared count 1–4 | **Rotating chooser** seat picks **0–4**; chooser rotates one seat right each round |
+| First player | Random starter each round | The **chooser** starts; deterministic rotation |
+| Turn timer | None | **30 s** per turn, with skip / auto-discard on timeout |
+| Draw preview | 2 s (hard-coded invariant) | **3 s** (configurable) |
+| Discard drawn card | Not allowed (forced swap) | **Allowed** — draw then discard straight away |
+| Power cards | Jack only, triggered on swap / cut / final | **Jack, Queen, King**, triggered **only** on draw-then-discard-straight-away |
+| — Jack | 1 s own-card peek | Same (1 s own-card peek) |
+| — Queen | — | **Blind swap**: one own card ↔ one opponent card, neither face seen, slots swap face down |
+| — King | — | **Lock / unlock**: lock a card face-up (any hand); locked cards can't move/discard/cut but still score |
+| Cut window | 3-second timer | Open **until the next player plays** (event-based); first valid cut wins |
+| Multi-card cut | Atomic multi-cut | **Single card** per cut |
+| Failed cutter | Takes next turn | Does **not** take the turn; order continues |
+| Failed cut reveal | — | Cut card shown **publicly for 2 s**, then face down |
+| Dutch tie | Tie wins (caller 0) | Tie **fails** (caller 2×) |
+| Disconnect | Pause + 90 s grace → abandon | **No pause**; disconnected turns time out and skip |
+| Setup choice timer | 30 s, forfeit unselected | 15 s, auto-pick (chooser→random, peek→nearest cards, bottom row first) |
+| Public projection | Counts + top discard only | Also: **replaced slot** on a swap, both slots of a Queen swap, every **locked** card face, every **cut** card (incl. failed, for 2 s) |
 
-[IMPLEMENTATION DEFAULT — CONFIRM] Ties for the match's lowest final total produce joint winners unless a separate tiebreak rule is provided. No invented tiebreaker.
-3. Domain model and state machine
-The server must be authoritative. Store all cards and temporary access windows only in server-controlled Room.state; send each client an individually redacted projection. Never send every player's hidden cards to the client and attempt to conceal them with CSS.
+Terminology is **"cut"** (matches existing code naming); do not rename to "snap".
 
-Recommended persisted shape (illustrative, not literal migration SQL):
+**Interaction amendments (owner, post-rewrite):**
+- **Draw enters the leftmost slot.** `draw` inserts the drawn card at hand index 0; the player then discards one card — `discard_drawn` discards the drawn card itself (power if J/Q/K), `swap_drawn {slot}` discards a chosen *other* card and keeps the draw at leftmost. Take-from-discard stays position-preserving. This intentionally overrides the "slot positions stay fixed" line in `RULES_DUTCH.md §3.1`.
+- **Consolidated setup timers 10 / 10 / 3.** Chooser has 10 s to pick (picking ends it early); everyone then has 10 s to *blind-select* which cards; then all peeks reveal **simultaneously** for 3 s (own-only) before play. `status='initial_peek'` carries `phase='select'` then `phase='reveal'`; `setup_choice_seconds=10`.
+- **Cutting is a double-tap** on one of your own cards (no cut button).
+- **Animations** surface the drawn card entering leftmost and the discarded card leaving, so opponents can track swaps.
+
+## 3. Domain model and persisted state
+
+One standard 52-card deck, reshuffled per round with a cryptographically secure RNG. Assign a unique opaque id per physical card so duplicate ranks are never ambiguous, and a per-round stable **slot handle** per hand position that is independent of the card identity and survives swaps. A discarded/cut face never carries a hidden id.
+
+Recommended `Room.state` shape (illustrative):
+```python
 state = {
   "game_type": "dutch",
-  "schema_version": 1,
-  "status": "lobby",            # lobby | initial_peek | playing | dutch_final | round_results | match_results | abandoned
+  "schema_version": 2,
+  "status": "lobby",        # lobby | choose_reveal | initial_peek | playing | dutch_final | round_results | match_results | abandoned
+  "phase": "lobby",         # fine-grained sub-phase (see §4)
   "host": 0,
-  "players": [None] * player_limit,  # 2..6; each seated player has a stable identity
-  "player_limit": player_limit,
-  "round": 0,                 # 1..10 while active
+  "players": [...],         # 2..6 seats; each seated player has a stable identity + presence leases
+  "player_limit": n,
+  "round": 0,               # 1..10 while active
   "max_rounds": 10,
-  "scores": [0] * player_limit,
+  "scores": [0]*n,
   "round_history": [],
-  "starter": None,
-  "turn": None,
-  "direction": 1,            # explicitly configured, never implied from the 10 engine
-  "hands": [],                # private: array of arrays with opaque stable card ids
-  "cards": {},                # private: card_id -> rank + suit; server only
-  "draw_pile": [],            # private ordered card ids
-  "discard_pile": [],         # public top card; entire pile may be in private state
-  "peek_count": None,
-  "initial_peeks_done": [],
-  "first_turn_done": [],
-  "draw_preview": None,       # private target, card_id, reveal_until
-  "jack_peeks": {},           # seat -> pending/active peek info with expiration
-  "cut_window": None,         # event_id, rank, expires_at, accepting
-  "dutch_caller": None,
-  "final_turn_order": [],     # exactly every other seat, each once
-  "final_turn_index": 0,
   "round_result": None,
   "winner_seats": [],
-  "paused": False,
-  "commands": [],             # bounded idempotency log
+
+  "direction": 1,           # turn + chooser rotation direction ("right"), configured, never implied from 10
+  "chooser": None,          # seat whose turn it is to pick the reveal count this round
+  "reveal_count": None,     # 0..4 once chosen; drives every player's starting-peek count
+  "starter": None,          # == chooser for the round
+  "turn": None,             # active seat
+  "turn_id": 0,             # monotonic; stale turn-scoped actions rejected
+  "turn_deadline": None,    # server_now + TurnSeconds; resolved in tick()
+  "setup_deadline": None,   # server_now + SetupChoiceSeconds for choose_reveal / initial_peek
+  "first_turn_done": [bool]*n,
+
+  "hands": [[{"slot": handle, "card": card_id, "locked": False}, ...], ...],  # private
+  "cards": {card_id: {"rank": r, "suit": s}},  # private; server only
+  "draw_pile": [card_id, ...],                 # private ordered
+  "discard_pile": [card_id, ...],              # top is public
+
+  "initial_peeks": {seat: {owner, cards:[...], until}},   # private timed reveals
+  "initial_peeks_done": [bool]*n,
+  "reserved": None,         # {owner, seat, card_id, until}  the 3 s drawn-card preview
+  "power": None,            # pending/active power: {seat, owner, kind: jack|queen|king, step, until/select_until, ...}
+  "cut_window": None,       # {event_id, rank}  open until the next player plays
+  "cut_reveal": None,       # {seat, card_id/face, until}  transient public failed-cut reveal (2 s)
+
+  "dutch_caller": None,
+  "final_turn_order": [],   # exactly every other seat, once
+  "final_turn_index": 0,
+
+  "commands": [],           # bounded idempotency log (who:uuid)
   "revision": 0,
+  "created_at": now,
+  "invitation_closed": False,
 }
-Use real player identities (not only seat integers) to associate temporary actions safely. Assign unique per-card IDs so duplicate card ranks never cause UI or protocol ambiguity. Per-round shuffling must use one normal deck, avoiding duplicate cards within the same round.
-State transitions
-```mermaid
-flowchart TD
-    A[Lobby / 2-6 ready] --> B[Deal four cards each]
-    B --> C[Random starting peeks]
-    C --> D[Normal play: draw or take, then swap]
-    D --> E{All players finished first turn?}
-    E -- No --> D
-    E -- Yes --> F[Cutting and Dutch enabled]
-    F --> D
-    D --> G{Valid cut emptied a hand?}
-    G -- Yes --> H[End round immediately / cutter scores 0]
-    G -- No --> I{Dutch called?}
-    I -- No --> D
-    I -- Yes --> J[Every other player: one final swap / no cuts]
-    J --> K[Reveal hands and score caller]
-    H --> L{Round 10 finished?}
-    K --> L
-    L -- No --> M[Next round / reshuffle]
-    M --> B
-    L -- Yes --> N[Match results / lowest cumulative total wins]
 ```
-Gameplay subphases
-Use small, testable subphases rather than a collection of unrelated flags. In particular:
-- normal_choice: current player may take visible discard or draw hidden; Dutch call may also be accepted when unlocked.
-- draw_reveal: the drawing player alone may see the drawn card's face until reveal_until = server_now + 2.0; hand swap can be selected once they know the draw, and may complete after the reveal hides.
-- swap_select: player must choose exactly one of their current hand slots; persist the swap only once.
-- discard_resolving: open a cut window if unlocked and not in dutch_final; resolve possible Jack peek independently and prevent two races from choosing the next turn.
-- initial_peek: each player chooses valid starting positions and privately views them for the configured time; start first turn only when all are finished (or timed out by policy).
-- dutch_final: run through a fixed list of opponents, one swap each, then reveal and score. Do not allow normal cut or Dutch call actions.
-- round_results/`match_results`: immutable results until next-round or rematch transition.
-Timer rules: Server time is authoritative. A page refresh, multiple browser tabs, or modified JavaScript must not lengthen a 2-second draw reveal or 1-second Jack peek. Expire access at the server before constructing any snapshot. The browser should also hide values exactly on schedule for smooth UX, but is not a security boundary. Existing RoomConsumer.watch() already ticks every second; implement sufficiently precise scheduled cut/peek expirations for Dutch, with server timestamps and a safe timeout fallback.
-4. Backend API and event protocol
-All commands should be checked for:
-- Correct game type, room, authenticated session identity, seated player, phase, seat/turn ownership, and requested card IDs.
-- Server-owned current discard rank; do not accept a submitted rank as proof of a cut.
-- Idempotency: a client-generated command UUID must not draw twice or double-penalize on retry.
-- Room-level transaction.atomic() + select_for_update() (same pattern as existing game/service.py). Keep mutations and timer transitions inside one serialized transaction. The existing thread lock is not a distributed production lock; the database lock is what matters across workers.
-- A monotonic room revision or event ID. Ignore stale cut or swap actions targeting an earlier discard/turn.
-- Safe reconnection: a reconnecting seated user recovers their own current phase, card positions and remaining private peek window, but never any other player's secrets.
-Suggested WebSocket commands:
-Action	Fields	Meaning
-dutch.ready	command	Toggle readiness in lobby
-dutch.start	command	Host starts with 2–6 occupied/ready seats, depending on chosen room capacity
-dutch.initial_peek	card_ids, command	Choose exactly permitted own positions for starting peek
-dutch.take_discard	slot_id, command, revision	Atomically take visible top card, swap with own slot, discard displaced card
-dutch.draw	command, revision	Reserve/draw hidden top card and privately show for 2 seconds
-dutch.swap_drawn	slot_id, command, revision	Finish mandatory swap of already reserved drawn card
-dutch.cut	card_ids, discard_event_id, command	One or multiple matching-rank cut attempts; server validates the batch
-dutch.jack_peek	slot_id, command	Choose own card for private 1-second Jack power
-dutch.call	command, revision	Call Dutch when eligible; establish the final opponent order
-dutch.next_round	command	Host advances after results, until round 10
-dutch.rematch	command	Reset points and start new 10-round match
-dutch.resync	none	Return fresh redacted snapshot
+Notes:
+- A hand slot carries `locked`. A locked slot's face is **public** (see §8), cannot be swapped/discarded/cut/Queen-moved, and still counts toward the total.
+- A Dutch caller's whole hand is treated as locked for the remainder of the round (no Queen/King/cut/swap can touch it), independent of per-card `locked` flags.
+- `power` holds at most one pending power for the active player; it is consumed or expires inside the 30 s turn and never extends it.
 
+## 4. State machine and phases
 
-Note: take_discard is a single atomic exchange; do not temporarily expose the taken face-up card in a second client's hand state. draw is a private reservation until swap_drawn commits it. If the drawer disconnects mid-swap, persist reservation and allow resumption; don't lose or duplicate a deck card.
+Per-round flow: **deal → choose_reveal → initial_peek → playing (→ dutch_final) → round_results**, then next round or match_results after round 10.
 
-Server-generated notifications can use: round.started, peek.available, draw.preview, card.discarded, cut.opened, cut.accepted, cut.penalty, jack.available, dutch.called, final.turn, round.finished, match.finished and game.error. Public notifications must not contain hidden card values. Preserve existing room-chat event names if reusing chat.
-Carefully implement a cut window
-1. Upon a normal swap discard, commit discard_event_id, top_rank and cut_window.expires_at atomically, only if cutting is unlocked.
-2. Send a public top-discard notification; allow off-turn players to submit cut card IDs by deadline.
-3. On each cut command, lock the room, verify the exact discard_event_id, the server timestamp, no unresolved round end, and all cards still owned by the cutter.
-4. Validate the whole batch against the current top discard rank.
-5. Success: move all selected cards to discard pile; make cutter the next normal turn owner; if their hand is empty, finish the round right now and cancel any remaining timers.
-6. Failure: take one unknown card from draw pile into cutter's hand; record one penalty for that atomic attempt; apply configured turn-transfer rule.
-7. Close or replace the old window; emit room updates. A rival's late attempt must not act on the previous event.
-8. If nobody cuts before deadline, hand control to the next normal player. Any server-side preview or Jack peek may expire independently.
-Do not allow a second client's success against the same card because both saw an open cut window. Define deterministic ordering by serialized server arrival, not client clocks.
-Running out of draw cards
-[IMPLEMENTATION DEFAULT — CONFIRM] When the draw pile empties, keep the current top discard face up, reshuffle the remainder of the discard pile into the hidden draw pile, and continue. If no cards remain available for reshuffling, block hidden-draw selection but allow legal face-up swaps and Dutch calls. Never duplicate or lose a card. If a penalty is due with no drawable card, record the situation and apply an explicitly configurable fallback; do not mint a nonexistent 53rd card.
-5. Redacted views and anti-cheat requirements
-The most important requirement: a browser client must never receive unearned hidden card faces or be able to deduce the deck order from stable public IDs.
+```
+Lobby (2–6 ready)
+  → Deal 4 each, flip first discard
+  → choose_reveal: chooser picks 0–4 (SetupChoiceSeconds; timeout → random)
+  → initial_peek: each player picks exactly reveal_count own cards, 3 s private reveal
+                  (SetupChoiceSeconds; timeout → nearest cards, bottom row first; reveal_count 0 → skip)
+  → playing: turns rotate right from the chooser, 30 s each
+       after every seat's first turn → cutting + Dutch unlock
+       empty-hand cut → round ends immediately (cutter 0)
+       Dutch called → dutch_final
+  → dutch_final: each other seat one normal turn (no cut, no Dutch), caller's hand locked
+  → round_results → (round<10 ? next round : match_results)
+```
 
-Suggested snapshot separation:
-Shared/public data:
-  game_type, room, status, round, max_rounds, seat count,
-  players' sanitized names/avatars/connection states,
-  hand card COUNTS, turn owner, face-up discard TOP CARD,
-  face-down draw COUNT, whether cutting/Dutch is enabled,
-  active cut deadline/event id, who called Dutch,
-  final-turn progress, cumulative scores, completed round results.
+Sub-phases (`phase`) keep the turn testable rather than a soup of flags:
+- `normal_choice`: active player may draw, take the discard, or (if unlocked) call Dutch.
+- `draw_reveal`: only the drawer sees the drawn face until `reserved.until = now + DrawPreviewSeconds`; then they **swap** or **discard straight away**. Face hides on expiry even if undecided.
+- `swap_select`: choose exactly one unlocked own slot to replace; persist once.
+- `power_select`: a power card was discarded straight away; run the Jack/Queen/King interaction (§6) within the turn.
+- `discard_resolving`: a card landed face up; if cutting is unlocked and not in `dutch_final`, open/refresh `cut_window`.
+- `dutch_final`: walk `final_turn_order`, one swap each; no cut, no second Dutch call.
+- `round_results` / `match_results`: immutable until an authorized `next_round` / `rematch`.
 
-Viewer-specific private data:
-  viewer seat, own opaque hand-slot ids (NOT faces),
-  which own slots can be selected, own reserved drawn card
-  face ONLY while active 2s reveal, own selected Jack card
-  face ONLY while active 1s reveal, own initial peek card
-  faces ONLY during authorized starting reveal.
+**Timer model (lazy, server-owned).** Keep the existing architecture: no background worker. `tick(state, now)` resolves every deadline on any read or action, and connected consumers poll (~250 ms) to drive it. `tick` must handle, in order: expiring initial/draw/power reveals; `choose_reveal` and `initial_peek` setup timeouts; and the **30 s turn deadline** (§5). A page refresh, extra tab, or edited client must never lengthen a reveal or a turn — expire at the server before building any snapshot.
 
-Round-end disclosure:
-  all players' remaining hands and score calculations,
-  but ONLY once the server enters round_results or match_results.
-- Never send hands, cards, draw_pile, discard_pile beyond the top card, commands, session IDs, auth IDs or other full internal state to spectators or other players.
-- Make dutch_public(state, viewer_seat) an explicit allowlist serializer; avoid dict(state) followed by incomplete key deletion. Likewise create a separate safe spectator projection. Existing game/spectator.py is 10-specific; route Dutch spectators through a Dutch-safe implementation or disable spectating for the first milestone.
-- Do not expose the hidden card's face in browser HTML/JS data attributes, localStorage, room-wide WebSocket messages, chat history, analytics, or accessible DOM outside the active reveal.
-- Limit repeated peeks to the exact authorized 2-second, 1-second or starting-peek grant; server must not allow replaying them with reused commands.
-- Public card IDs should be newly randomized per round, and only a player's own slot handles should be stable enough for interaction. Avoid leaking top-of-deck ordering.
-- Keep session cookies HTTP-only and HTTP fallback CSRF-protected. Rate-limit room creation, join attempts, cut spam and WebSocket actions.
-6. Game scoring pseudocode
-CARD_POINTS = {
-    "A": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6,
-    "7": 7, "8": 8, "9": 9, "10": 10,
-    "J": 11, "Q": 12, "K": 13,
-}  # IMPLEMENTATION DEFAULT, configurable until owner confirms
+## 5. Turn and timer model (new)
 
+Each turn gets `turn_deadline = now + TurnSeconds` (30 s) set when the turn becomes active. `tick` enforces it:
+- **Timeout before the player draws/takes** → skip the turn. It still sets `first_turn_done[seat]` (counts for the unlock). Advance to the next seat (or next `final_turn_order` entry).
+- **Timeout after a draw** (a `reserved` card is held) → auto-discard the drawn card face up. A power card auto-discarded this way grants **no** power. Then advance the turn.
+- The 3 s draw preview and any power selection live **inside** the 30 s; an unfinished power is lost at the deadline.
 
-def hand_total(hand_card_ids, cards):
-    return sum(CARD_POINTS[cards[cid]["rank"]] for cid in hand_card_ids)
+Because turns self-advance on timeout, the table never blocks on a slow or disconnected player (§11). `turn_deadline` is public so every client can render the countdown.
 
+## 6. Power cards — Jack, Queen, King
 
-def finish_dutch_round(state, caller):
-    assert state["status"] == "dutch_final"
-    assert state["final_turn_index"] == len(state["final_turn_order"])
-    totals = [hand_total(hand, state["cards"]) for hand in state["hands"]]
-    lowest = min(totals)
-    caller_success = totals[caller] == lowest  # tie policy is configurable
-    earned = totals[:]
-    earned[caller] = 0 if caller_success else 2 * totals[caller]
-    finish_round(state, earned, reason="dutch", winner=caller if caller_success else None)
+Trigger for all three: the active player **draws from the draw pile and discards it straight away** (the `discard_drawn` action), and the discarded card is a J/Q/K. Using the power is optional; it never changes turn order, is not a swap or a cut, and must complete before the turn deadline. A power card that is swapped out of the grid, taken from the discard pile, cut, or auto-discarded on timeout grants **no** power.
 
+- **Jack — peek.** Choose one of your own cards; see its face privately for `JackPeekSeconds` (1 s), then it hides. Never reveals another player's card.
+- **Queen — blind swap.** Choose one of your own cards and one card in any opponent's hand; the two cards exchange slots, **face down, neither face revealed**. Public projection shows *which two slots* exchanged, never the faces. Locked cards (King lock or a Dutch caller's hand) are not selectable on either side.
+- **King — lock / unlock.** Either lock one card (turn it **face up**, publicly visible, and set `locked`) or unlock one currently locked card (clears `locked`; the card turns **face down** again — `UnlockedCardFaceDown` default). Target may be **any** player's hand including your own (`KingTarget` default). A locked card cannot be swapped (drawn/discard/Queen), discarded or cut while locked. A card in a Dutch caller's hand cannot be locked or unlocked.
 
-def finish_empty_cut_round(state, cutter):
-    assert len(state["hands"][cutter]) == 0
-    earned = [hand_total(hand, state["cards"]) for hand in state["hands"]]
-    earned[cutter] = 0
-    finish_round(state, earned, reason="empty_cut", winner=cutter)
+Represent an in-progress power as `state['power']` with a `kind`, the owner identity, a selection step, and a time box where applicable (Jack's 1 s reveal). Only the owner's projection exposes a Jack face; Queen/King results are public at the slot level.
 
+## 7. Cutting (event-based window)
 
-def finish_round(state, earned, reason, winner):
-    assert state["status"] not in {"round_results", "match_results"}
-    for seat, value in enumerate(earned):
-        state["scores"][seat] += value
-    # Append an immutable copy to history, including actual cards and score breakdown.
-    # Cancel card previews, cut windows and outstanding actions.
-    # If round == 10, choose all seats tied for min(cumulative scores),
-    # else transition to round_results and await an authorized next_round command.
-Validation example: failed Dutch — Caller P2 has hand value 9; P1 has value 7; P3 value 12; P4 value 16. Caller P2 receives 18 points, while P1/P3/P4 score 7/12/16 respectively. Caller is not rewarded for initiating the round end.
+When any card lands face up (normal swap discard, discard-drawn, or a successful cut), and cutting is unlocked (every seat has finished its first turn) and not in `dutch_final`, open `cut_window = {event_id, rank}` for the current top discard. There is **no fixed timer**: the window stays open until the next player plays (draw / take / call Dutch), at which point it clears. The first valid cut command, by serialized server arrival, wins.
 
-Validation example: successful Dutch — Caller P2 has 5, other players have 7, 12 and 16: P2 scores 0, others 7/12/16. If another player overtakes P2 during their final swap, the call fails.
+- Own, **unlocked** cards only; one card per cut (`MultiCardCut` default false). Trying to cut a locked card is rejected with no penalty.
+- **Success:** the card moves to the discard pile, the hand shrinks permanently, the **cutter takes the next turn**, and (default `CutOnCutCard`) the cut card opens a fresh `cut_window`. If the hand is now empty, finish the round immediately (cutter scores 0) and cancel pending timers/powers.
+- **Failed cut (wrong rank):** the card returns to its slot face down; add **one** face-down penalty card from the draw pile (never shown). The card is revealed publicly for `FailedCutRevealSeconds` (2 s) via `cut_reveal`, then hidden. Default `FailedCutterTakesNextTurn` false → turn order continues normally.
+- A cut against a stale `event_id`, or after Dutch, or on an empty/zero draw pile for the penalty, follows the exhaustion fallback (§ rules 10): no invented card.
 
-Validation example: empty cut — P4 cuts their last two cards correctly: the round ends immediately, P4 scores 0, everyone else reveals and scores their own remaining totals, even if it wasn't P4's normal turn.
-7. User experience and visual requirements
-Keep the premium, animated, polished feel of the current site, but give Dutch its own table visual language. Reuse brand variables and accessible controls where possible, not the existing four-seat trick UI.
-Entry and lobby
-- Provide a clear 10 Card Club / Dutch game selector or a dedicated Dutch page linked from navigation.
-- Player chooses total seats 2, 3, 4, 5 or 6, display name and optional deck theme.
-- Create short shareable room code and invite link. Support guest session players using existing identity behavior, with optional account profiles.
-- Show occupied seats, waiting slots, ready toggles, connected status and a host-only Start button.
-- Start with all selected seats filled and ready. Users should not be forced into teams or 4-player seating.
-- Show a friendly rule overlay, especially cutting, Jack peek and Dutch final-turn lockout.
-Table
-- Responsive circular or elliptical tabletop, with 2–6 seats distributed evenly, each player's hand shown as four card backs initially (hand count may shrink from cuts or grow from penalties).
-- Keep the user's own hand anchored at the bottom regardless of true seat order. Opponents' hands are card backs only; show their card counts.
-- Clearly render two separate central piles: face-up discard pile showing exact top card, face-down draw pile with remaining count.
-- Tap/click an allowed pile, then tap one of your own slots to swap. On hidden draw, show a large private 2-second reveal with a countdown before hiding.
-- During initial_peek, highlight the exact number of selectable own cards. Show the chosen cards privately for the authorized duration, then flip them face down.
-- After the first cycle, display CUT and CALL DUTCH availability. On a discard, show a short cut opportunity UI allowing multiple own card positions to be selected before one Cut Selected submission.
-- When a cut is accepted, animate the selected cards toward the discard pile and update the cutting player's reduced hand. On an incorrect cut, animate one face-down penalty card into their hand and never display its face.
-- On Jack discard, offer a choose-one-own-card overlay; show that card privately for 1 second and close it automatically.
-- On Dutch call, add a prominent DUTCH CALLED indicator, mark the caller, show remaining final turns, disable all cut controls, and permit only a single take-and-swap for each opponent.
-- On empty-hand cut, immediately show the win animation and round results — never run final turns.
-- After each round, reveal everyone's cards, display hand subtotals and score changes, especially 0 for winning Dutch/empty cut and 2× for failed Dutch, and show cumulative scores.
-- After the tenth round, show a final sorted scoreboard, the lowest-total winner(s), and a rematch control.
-- Support keyboard operation, touch, reduced motion, visible focus, sensible card labels and WCAG-friendly contrast.
-- Animations should not block game logic, hide important action availability or extend private reveal windows.
-Mobile interaction requirements
-- Design for 320px+ wide screens, with oversize tap targets, horizontally scrollable hand if penalty cards accumulate, and no page-width overflow.
-- Use an overlay/drawer for cuts, scoring and rules so the main table remains legible.
-- Do not rely on drag-and-drop alone; tapping a pile and then a slot must always work.
-- Avoid showing an opponent's hidden card face during any flip animation or reconnection.
-8. Bots and social features
-Milestone 1 (required): Human multiplayer with private rooms and room sharing. Reuse current session identity, optional profiles and text chat safely. Keep existing friends/chat available elsewhere in the site. A Dutch voice/video feature is not required for initial acceptance, because the existing voice path assumes four seats.
+## 8. Redacted projection and anti-cheat
 
-Milestone 2 (optional): Dutch bots for solo/practice sessions. Bots must use only information a human player would have observed: their own currently authorized peeks, public discards, a small remembered card map and card counts. A bot must not inspect other hands, future deck cards or exact hidden values when choosing actions. Make bots aware of the 2-second draw reveal, optional Jack peek, cutting windows, Dutch risk, scoring and 10-round horizon.
+`dutch_engine.public(state, viewer, now)` is an explicit allowlist serializer (build the dict from scratch — never `dict(state)` then delete). Reconnect/resync use the same function so expired reveals are already gone. A separate, stricter spectator projection (viewer = None) exposes strictly less.
 
-Milestone 3 (optional): Integrate Dutch into friend/group invitations and spectating after refactoring the 10-only routing assumptions. Existing social match links use /room/<code>/; Dutch room links must go to /dutch/room/<code>/ and be resolved from the room's game_type. Spectator APIs must never leak hidden cards.
-9. Edge cases that MUST be resolved
-1. Two players cut the same discard simultaneously: only one accepted attempt per server event; other gets stale-event rejection with no penalty.
-2. One player cuts multiple cards with different ranks: reject the batch or apply configured all-or-nothing failed-cut penalty; do not partially cut and inconsistently punish.
-3. Cut after Dutch was called: reject, even if a cut button remained visible in a stale client.
-4. Empty cut after a Jack discard: empty-hand round end outranks Jack peek; no further action or peek.
-5. Player hand becomes 0 before the normal next turn: immediate score resolution and no subsequent final turn.
-6. Draw preview expires during network latency: maintain reservation, hide the face after 2 seconds, permit the required slot swap without re-revealing.
-7. Disconnect while in a cut window: client reconnection cannot restart a timed opportunity; server resolves window by deadline.
-8. Disconnect after a Dutch call: preserve exact remaining final-turn order; pause/reconnect according to agreed timeout policy and never grant duplicate last turns.
-9. Duplicate or late command: idempotent no-op or explicit stale-command error; never duplicate physical cards or points.
-10. Penalty with an exhausted deck: safely replenish from eligible discard cards if possible; do not create cards from nothing.
-11. Jack with zero legal peek targets: do not open a choice; if no cards remain, round must already have ended.
-12. First-cycle qualification: cutting/Dutch unlock after all actual seated players each complete one swap; changes in hand count cannot bypass this.
-13. 2, 3, 5, 6 players: seat rotation, final-turn order, snapshot counts, UI and end-of-round scoring work without hardcoded four-player assumptions.
-14. 10th round: game transitions to match results exactly once, with no 11th deal and no premature stop based on a point threshold.
-15. Scoring ties: apply configurable Dutch-tie policy; if equal cumulative totals remain after round 10, display joint winners by default.
-16. Private data leak: verify every role — host, player, spectator, guest, non-member, disconnected tab — sees only authorized information.
-17. Room collision: an existing 10 Club room code routed to /dutch/room/ must not load as Dutch and vice versa.
-18. First discard pile: do not allow cutting the initial face-up card before first-cycle unlock.
-10. Test plan and acceptance criteria
-Implement unit, integration and end-to-end tests before production deployment.
-Engine unit tests (game/test_dutch_engine.py)
-- [ ] One shuffled 52-card deck has 52 unique cards and correct four-card deals for 2–6 players.
-- [ ] Initial discard and draw pile counts are correct; no card is lost or duplicated after swaps/cuts/penalties/replenishment.
-- [ ] Each initial peek is authorized, private, count-limited and time-limited.
-- [ ] Only the active player may take a discard or draw a hidden card.
-- [ ] Hidden drawn card is visible to drawing player for 2 seconds, then hidden while swap still works.
-- [ ] Both take sources perform a required single-card swap; displaced card becomes top discard.
-- [ ] No cutting and no Dutch are legal until each player finishes their first turn.
-- [ ] Any card with matching rank regardless of suit is a valid cut.
-- [ ] Three matching cards can be removed in one successful cut; cutting player receives next turn.
-- [ ] Invalid single or batch cut adds exactly one unseen face-down penalty card.
-- [ ] A Jack discarded from the hand grants a private 1-second peek and does not change turn order.
-- [ ] A Dutch call captures opponent final-turn order (exactly N-1 players, exactly once).
-- [ ] Final Dutch turns are swap-only; no cut or second Dutch call is accepted.
-- [ ] A successful Dutch caller scores 0, even if their remaining hand total was nonzero.
-- [ ] A failed Dutch caller scores exactly 2 × their own hand value; all opponents score normal values.
-- [ ] A player cutting their final card scores 0 and ends the round immediately with zero final turns.
-- [ ] A full match lasts exactly ten rounds; cumulative lowest score determines winner(s).
-- [ ] Ties follow the configured policy; no phantom scores or double score application.
-Integration and security tests (game/test_dutch_service.py, game/test_dutch_ws.py)
-- [ ] Anonymous/guest sessions join a room by code, but unrelated sessions cannot act for occupied seats.
-- [ ] Only host can start, advance, rematch and delete as applicable.
-- [ ] Commands are transactional; concurrent cut and swap attempts never corrupt room state.
-- [ ] Replayed command UUID never duplicates draws, cuts, penalty cards, Jack previews or scoring.
-- [ ] Player A's WebSocket and REST snapshot never contain B's hidden card ranks, deck order or B's private reveal.
-- [ ] Spectator/admin-view public APIs have deliberate allowlisted content.
-- [ ] Reconnect and resync preserve game state while expired peeks remain hidden.
-- [ ] Existing 10 Club endpoints/routes, game rules, tests and templates are unaffected.
-- [ ] python manage.py test succeeds across the full repository.
-Manual end-to-end test
-Open 2–6 separate browser profiles, start a match, complete the initial peek, perform face-up and face-down swaps, verify peek timers, test single and multiple cuts, make an incorrect cut, test Jack, then run one successful Dutch and one failed Dutch. Verify the other players get exactly one last swap and cannot cut. Trigger an all-cards cut and verify no final turns occur. Finally play 10 rounds and verify the cumulative scoreboard.
-11. Development sequence
-1. Protect current 10: run python manage.py test on the baseline, capture results, and add an isolated Dutch module and routes.
-2. Define typed rule configuration and engine: deck, card values, state machine, initial peeks, swaps, cut windows, Jack, Dutch final turns and scoring. Write engine unit tests first.
-3. Build Dutch room service: session identity, 2–6 lobby/ready logic, host controls, atomic mutations, command deduplication, private projections, 10-round persistence and reconnection.
-4. Build Dutch Channels consumer and REST fallback: private per-seat snapshots, room broadcast, server-owned timer expiry, stale-command protection.
-5. Build Dutch UI: clean selection of cards/slots, central two piles, 2-second and 1-second peeks, multi-cut, Dutch call, animated final turns, all-players reveal and scoreboards.
-6. Validate concurrency/security: stale cut racing, reconnect, duplicate requests, correct card conservation, redacted spectators.
-7. Integrate game selection: add a visible Dutch entry point while leaving all 10 Club routes and behavior intact.
-8. Run all tests and manually play entire 10-round matches for 2 and 6 players. Only then deploy separately using the repository's existing infrastructure/runbook.
-Commands
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py test
-python manage.py runserver 127.0.0.1:8000
-On Windows PowerShell, use .venv\Scripts\Activate.ps1 for activation.
-12. Ready-to-use coding-agent instruction
-Read this entire DUTCH_IMPLEMENTATION.md and inspect the repository before editing. Implement a standalone Dutch mode in ismlmhfz/dhiheh, preserving the existing Django/Channels 10 Card Club unchanged. Follow the confirmed user rules verbatim: 2–6 players, 4 hidden cards each, two center piles, a random starting peek count, required swaps, 2-second private draw peek, cutting after everyone plays once, multiple same-rank cuts, one unseen penalty card for incorrect cuts, cutting player takes the next turn, 1-second Jack private peek, Dutch call after first cycle, N−1 final swap-only turns with no cuts, successful Dutch = 0 points, failed Dutch = 2× caller hand total, empty-hand cut = immediate 0-point win without final turns, and lowest cumulative score after exactly 10 rounds wins. Keep all remaining ambiguities in a single configurable rule object marked IMPLEMENTATION DEFAULT — CONFIRM. Write server-authoritative tests for private-card leaks, concurrency, timers and score calculations; then implement responsive tabletop UI. Execute the full existing Django test suite and report the files changed, test output and any remaining configurable defaults. Do not deploy to production as part of implementation.
+**Public to everyone:** `game_type, status, phase, round, max_rounds, player_limit, host`, sanitized players (name/avatar/connected/ready), hand **counts**, top discard face, draw-pile **count**, `turn`, `turn_id`, `turn_deadline`, `chooser`, `reveal_count`, whether cut/Dutch is unlocked, `dutch_caller`, `final_turn_order`/progress, scores, and — new to this ruleset — every **locked** card's face, the **replaced slot** of a swap, the two slots of a Queen swap (faces hidden), and the current **cut** card including a failed cut's face while `cut_reveal` is live.
 
-13. Owner decisions still unconfirmed (do not invent silently)
-All of the following are engineering defaults, not previously approved rules:
-Topic	Current implementation default
-Card face values	A=1; numbers as printed; J=11; Q=12; K=13
-Random initial peek count	One shared random number 1–4, once per match
-Starting peek duration	3 seconds
-Play rotation	Clockwise
-Dutch availability	Caller may call instead of taking a normal turn once first cycle is completed
-Dutch ties	Tied-lowest caller counts as a successful call
-Final match tie	Shared winners
-Multi-cut containing a bad card	All-or-nothing, one unseen penalty card
-Turn after invalid cut	Pass next move to cutting player
-Cut opportunity deadline	3 seconds per discard event
-Cutting a discarded Jack	Also triggers Jack's 1-second peek
-Jack effect during Dutch final swaps	Allowed when a Jack is discarded through the required swap
-Exhausted draw pile	Reshuffle discarded cards except current top
-Next-round starting player	Reroll a random starter for every round
+**Private to the viewer only:** own seat, own slot handles (not faces), which own slots are selectable, the `reserved` drawn face only while `now < reserved.until`, a Jack-peeked own face only while its 1 s window is live, and own initial-peek faces only during the authorized 3 s.
 
+**Round-end disclosure:** all hands and the score breakdown, only once `status` is `round_results`/`match_results`.
 
-Expose these in one DUTCH_RULES object/constants module and test against that configuration. Confirmed behavior must never be overwritten by a default — in particular, no cuts during Dutch final turns and no final turns after an empty-hand cut.
+Never send `hands`, `cards`, `draw_pile`, the full `discard_pile`, `commands`, identities or session ids to any client. Public card ids are re-randomized per round; only a player's own slot handles are stable enough to interact with, and they must not leak deck order. HTTP fallback stays CSRF-protected; rate-limit room creation, joins, cut spam and socket actions.
 
-Deliverable definition: a production-quality working Dutch game, integrated as an additional mode, with rule-accurate backend, responsive UI, 2–6 player realtime room handling, ten-round scoring, tests, and no regression to 10 Card Club.
+## 9. Backend action protocol
+
+All commands verify: correct `game_type`/room, authenticated seated identity, phase and turn/seat ownership, requested slot/card ownership, server-owned discard rank (never trust a submitted rank), a client command UUID for idempotency, and a monotonic `turn_id`/`revision` to drop stale turn-scoped actions. Every mutation runs inside `transaction.atomic()` + `select_for_update()` (the DB lock is the real cross-worker guard; the thread mutex is in-process only), consistent with `game/service.py`.
+
+Actions (WebSocket `dutch.<action>` and HTTP `/dutch/api/<action>/`):
+
+| Action | Fields | Meaning |
+|---|---|---|
+| `ready` | command | Toggle lobby readiness |
+| `start` | command | Host starts with all seats filled, connected, ready |
+| `choose_reveal` | count, command | Chooser picks the reveal count 0–4 |
+| `initial_peek` | slots[], command | Pick exactly `reveal_count` own cards for the 3 s peek |
+| `draw` | command, turn_id | Reserve the top draw card; private 3 s preview |
+| `swap_drawn` | slot, command, turn_id | Swap the reserved card into an unlocked own slot |
+| `discard_drawn` | command, turn_id | Discard the reserved card straight away (may trigger a power) |
+| `take_discard` | slot, command, turn_id | Take the top discard and swap into an unlocked own slot |
+| `jack_peek` | slot, command | Jack power: peek one own card (1 s) |
+| `queen_swap` | own_slot, target_seat, target_slot, command | Queen power: blind cross-hand swap |
+| `king_lock` | target_seat, target_slot, mode(lock/unlock), command | King power: lock or unlock a card |
+| `power_skip` | command | Decline the pending power |
+| `cut` | slot, event_id, command | Cut one own card matching the current discard |
+| `call` | command, turn_id | Call Dutch; build `final_turn_order` |
+| `next_round` | command | Host advances after results (until round 10) |
+| `rematch` | command | Reset scores, new 10-round match |
+| `leave` / `delete` | command | Lobby leave / host delete |
+| `resync` / `tick` | — | Fresh redacted snapshot / drive timers |
+
+Presence actions (`connect`/`heartbeat`/`disconnect`) keep the lease model from the current build. Server notifications (public, never carrying hidden faces): `round.started, reveal.chosen, peek.available, draw.preview, card.discarded, power.used, cut.opened, cut.accepted, cut.penalty, dutch.called, final.turn, round.finished, match.finished, game.error`. Reuse existing room-chat events.
+
+## 10. Scoring
+
+Card values A=1 … K=13 (`CardValues`, confirmed). Locked cards count normally. Round-end cases:
+- **Empty-hand cut:** cutter 0; everyone else their hand total.
+- **Dutch, caller strictly lowest:** caller 0; everyone else their total.
+- **Dutch, anyone ties or beats the caller:** caller **2 × their own total**; everyone else their total. (`DutchTieCountsAsWin` false — a tie **fails**.)
+
+Worked checks (from the rules): caller 9 vs 7/12/16 → caller **18**; caller 7 with another 7 → tie fails, caller **14**; caller 5 vs 7/12/16 → caller **0**. After exactly 10 rounds the lowest cumulative total wins; equal lows are joint winners.
+
+## 11. Disconnects (no pause)
+
+`PauseOnDisconnect` default is **false**: do not pause. A disconnected seat keeps its place and rides the normal 30 s turn timer — its turns simply time out and skip (§5). On reconnect the player gets the full state back: hand positions, locked cards, turn order, remaining `final_turn_order`, and any still-valid private peek (never a restarted one).
+
+Keep the lease-based presence from the current build for *rendering* connection dots, but it no longer gates play. **All-idle safeguard (confirmed, kept):** if **no** seated player is connected for one full turn cycle, abandon the round (`status='abandoned'`) without scoring, rather than skipping turns forever on a dead table. This is the one design decision the rules don't cover; it is configurable and defaults to on.
+
+## 12. Configuration object
+
+Rebuild `game/dutch_rules.py` as one validated config dict mirroring the `RULES_DUTCH.md` Configuration table, overridable via `settings.DUTCH_RULES`, frozen per room at creation (`state['rules']`). Validate ranges and types and reject unknown keys, as the current module does. There are **no** hard-coded, non-configurable invariants in the new ruleset (the old "2 s draw / no final cuts / 10 rounds are not switches" wording goes away) — but confirmed values should not be changed casually.
+
+Keys (confirmed): `Players 2–6, UseJokers false, CardValues, RevealCountRange 0–4 rotating-right, StartingPeekSeconds 3, DrawPreviewSeconds 3, TurnSeconds 30, AllowDiscardDrawnCard true, PowerCards (J peek / Q blind-swap / K lock-unlock, drawn-and-discarded-straight-away), JackPeekSeconds 1, CutUnlock after-first-turn/first-discard-never, CutOpponentCards false, CutWindow until-next-play, CutterTakesNextTurn true, FailedCutPenaltyCards 1, CutsArePublic true, EmptyHandEndsRound true, CutDuringDutchFinal false, DutchFinalTurn one-each/caller-locked, DutchTieCountsAsWin false, FailedDutchMultiplier 2, Rounds 10, ReconnectFullResume true, ReplacedSlotIsPublic true`.
+
+Keys (**[DEFAULT — CONFIRM]**): `FirstPlayer=chooser, SetupChoiceSeconds=15, TimeoutBeforeDraw=skip, TimeoutAfterDraw=auto-discard-no-power, KingTarget=any-player, UnlockedCardFaceDown=true, CutLockedCard=blocked-no-penalty, MultiCardCut=false, CutOnCutCard=true, FailedCutterTakesNextTurn=false, FailedCutRevealSeconds=2, MatchTie=joint-winners, EmptyDrawPile=reshuffle-except-top, PauseOnDisconnect=false`, plus the all-idle safeguard from §11.
+
+## 13. Front-end / table UI and animation plan
+
+`RULES_DUTCH.md` §13 is the UI spec; implement it in `templates/dutch/index.html` + `dutch.js` + `dutch.css`. Reuse brand tokens and accessible controls; keep the own-hand anchored at the bottom; 320 px+, oversized tap targets, overlays for cut/scores/rules, no page-width overflow, tap-pile-then-slot (never drag-only), reduced-motion fallbacks, and never show an opponent face during a flip or reconnect. **Opponent card sizing:** render other players' cards slightly larger than the current build so seats stay easy to track across a 2–6 player table (still smaller than the own-hand anchor, but with a bump in card and slot-grid size and clearer per-seat counts). New screens/affordances versus the current UI:
+- **Chooser prompt:** when you are the chooser, pick 0–4 with a 15 s countdown; others see "waiting for the chooser".
+- **Starting peek:** handle 0 (skip) through 4 (whole hand), 15 s auto-pick.
+- **30 s turn timer:** every seat shows the active player's glow + countdown; the active player gets the stronger "Your turn" treatment and a larger countdown.
+- **Draw flow:** 3 s private reveal, then **swap into a slot** or a **"Discard instead"** button; locked slots greyed and unselectable.
+- **Powers:** Jack (own-slot peek, 1 s), Queen (pick own slot + opponent slot; both slide face down), King (lock → face-up with lock icon / unlock → face down). Public views show the slots involved, not hidden faces.
+- **Cutting:** single-card select, available until the turn advances (no countdown ring); success flashes + jumps the turn to the cutter; failed cut shows the card publicly ~2 s with a negative effect, then a face-down penalty slides in.
+- **Round/results:** reveal all hands, hand totals and round scores (highlight 0 and 2×), cumulative scores, then final scoreboard + winner(s) + Play again.
+- Remove all "paused / waiting for players" banners — the no-pause model means turns simply time out.
+
+## 14. Edge cases that must be resolved
+
+1. Reveal count 0 → skip the peek phase entirely; 4 → every own card peekable.
+2. Chooser / peek timeout → server auto-pick (random count; nearest cards bottom-row-first) without revealing anything publicly.
+3. Turn timeout before vs after draw → skip vs auto-discard-no-power; always advances exactly once; `first_turn_done` set on a skip.
+4. Power only on draw-then-discard-straight-away; swapped/taken/cut/auto-discarded power cards grant nothing.
+5. Queen/King may not touch a locked card or any card in a Dutch caller's locked hand; King can't lock/unlock a caller's hand.
+6. Two players cut the same discard → one accepted by serialized arrival; the other gets a stale-`event_id` rejection with no penalty.
+7. Cut window closes exactly when the next player plays; a late cut against the previous `event_id` is rejected.
+8. Failed cut → one unseen penalty, 2 s public reveal, turn order unchanged (default); exhausted draw pile → no penalty card minted.
+9. Empty-hand cut outranks any pending power/Dutch; round ends immediately with no final turns.
+10. Dutch tie fails (caller 2×); exactly N−1 final turns, swap-only, no cut, no second call; caller hand fully locked.
+11. Disconnect mid-turn → the 30 s timer still fires and skips; reconnect restores state and any still-valid peek, never a restarted one. All-idle → abandon per §11.
+12. Card conservation: never create or lose a card across swap / discard-drawn / Queen / cut / penalty / reshuffle.
+13. 2/3/5/6 players: chooser rotation, turn order, final-turn order, counts, UI and scoring with no hard-coded 4-seat assumptions.
+14. Round 10 → match_results exactly once; no 11th round; no early stop on score.
+15. Private-data leak check across every role: host, player, spectator, guest, non-member, disconnected tab, reconnecting tab.
+16. Room collision: a 10 code on `/dutch/room/` (and a Dutch code on `/room/`) must not load; middleware + consumer guards hold.
+
+## 15. Test plan
+
+Engine unit tests (`game/test_dutch_engine.py`): 52 unique cards and correct deals for 2–6; conservation across every mutation; rotating chooser + 0–4 reveal + chooser-starts; authorized/time-boxed initial peeks incl. count 0; 30 s turn skip and post-draw auto-discard; discard-drawn triggers; each power (Jack peek, Queen blind swap, King lock/unlock) incl. locked-card and caller-locked rejections; cut unlock, single cut, cutter-takes-turn, failed-cut penalty + turn-unchanged + 2 s reveal, empty-hand cut 0; Dutch final order (N−1, once), swap-only, tie-fails 2×, strict-lowest 0; exactly 10 rounds, joint-winner ties; exhausted-deck reshuffle and no-mint fallback.
+
+Service / WS / concurrency tests: guest join by code but no acting for others' seats; host-only start/next/rematch/delete; transactional concurrent cut vs play never corrupts state; replayed command UUID never double-draws/cuts/penalizes/scores; A's snapshot never contains B's hidden faces/deck order/private reveal (incl. the new public locked/cut/slot fields verified to leak nothing hidden); spectator allowlist; reconnect/resync hides expired peeks; **all existing 10 tests still pass**; row-lock race tests on PostgreSQL (skip on SQLite). Browser scripts under `tests/` updated for the new flow.
+
+Manual end-to-end: 2–6 profiles; chooser pick incl. 0 and 4; peek timers; both take sources; discard-drawn with each power; single cut, failed cut, empty-hand cut; one successful and one failed Dutch (incl. a tie); verify N−1 final swaps with no cut; 10-round scoreboard; a disconnect that skips on the timer and a clean reconnect.
+
+## 16. Build sequence
+
+1. Baseline: `python manage.py test` green; confirm the 10 suite is the protected reference.
+2. `dutch_rules.py`: new config object + validation. Tests first.
+3. `dutch_engine.py`: state shape, chooser/reveal, peeks, turn timer, swap/discard-drawn, powers, cutting, Dutch final, scoring. Engine unit tests first, driven by explicit `now`/RNG.
+4. `dutch_service.py`: lobby/host/lifecycle, atomic mutate dispatch for the new actions, presence (no-pause) + all-idle safeguard, idempotency, per-seat projection.
+5. `dutch_consumer.py` + `dutch_views.py`: action allowlists, public snapshots, lazy timer ticks, stale-command protection, isolation guards intact.
+6. Front-end: `index.html` + `dutch.js` + `dutch.css` per §13.
+7. Concurrency/security validation; update browser scripts.
+8. Full suite green; manual 2- and 6-player matches. No production deploy.
+
+Dev commands (Windows): `python -m venv .venv; .venv\Scripts\Activate.ps1; pip install -r requirements.txt; python manage.py migrate; python manage.py test; python manage.py runserver 127.0.0.1:8000`.
+
+## 17. Open decisions
+
+Everything marked **[DEFAULT — CONFIRM]** in §12 follows `RULES_DUTCH.md` and stays configurable. The only decision the rules don't address, the **all-idle safeguard** in §11 (abandon a round when no seat is connected for a full turn cycle), is **confirmed kept**, default on. Flag any of these for owner confirmation rather than hard-coding them as rules.

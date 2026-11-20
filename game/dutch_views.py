@@ -59,7 +59,7 @@ def api(request,action):
                 message=service.chat_post(code,who,data.get('text'),data.get('command'))
                 async_to_sync(get_channel_layer().group_send)('dutch_'+code,{'type':'dutch_chat','message':message})
                 return JsonResponse({'sent':True,'command':data['command']})
-            allowed={'join','resync','ready','start','initial_peek','draw','take_discard','swap_drawn','cut','jack_peek','call','next_round','rematch','leave','delete'}
+            allowed={'join','resync','ready','start','choose_reveal','initial_peek','draw','take_discard','swap_drawn','discard_drawn','cut','jack_peek','queen_swap','king_lock','power_skip','call','next_round','rematch','leave','delete'}
             if action not in allowed:raise ValueError('Unknown Dutch action.')
             state=service.mutate(code,None if action=='resync' and data.get('watch') else who,action,data)
             async_to_sync(get_channel_layer().group_send)('dutch_'+code,{'type':'dutch_update'})

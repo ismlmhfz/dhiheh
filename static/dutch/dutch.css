@@ -4,3 +4,65 @@
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
 .pile:disabled{opacity:1}.pile:disabled strong,.pile:disabled small{opacity:.7}.pile.selected .card{outline:3px solid var(--mint);outline-offset:4px}.hand-zone{max-width:100%;min-width:0}.results{overflow-wrap:anywhere}
+
+/* ===== Dutch reimplementation UI (RULES_DUTCH.md §13) ===== */
+#turn-bar{display:flex;align-items:center;justify-content:center;gap:14px;margin:6px 0}
+#turn-timer{font-weight:700;font-size:15px;min-width:44px;text-align:center;color:#eadcbc;background:#241b37;border:1px solid #5a4a74;border-radius:16px;padding:3px 10px}
+#turn-timer.urgent{color:#ff9f9f;border-color:#b5545a;animation:dutch-pulse 1s infinite}
+.prompt{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;margin:8px auto;max-width:640px;padding:10px 14px;border:1px solid #dbb977;border-radius:14px;background:#2a1b43;text-align:center}
+.prompt strong{font-size:14px}
+.pick-row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+button.pick{min-width:54px;font-weight:700}
+.card{position:relative}
+.card .lock{position:absolute;right:3px;bottom:2px;font-size:11px;font-style:normal;line-height:1}
+.card.locked{box-shadow:0 0 0 2px #dbb977 inset}
+/* opponents: bigger, trackable, clickable cards */
+.opponent{width:150px}
+.opp-hand{display:flex;justify-content:center;gap:4px;margin:6px 0 2px;flex-wrap:wrap}
+.opp-slot{min-width:0}
+.opp-slot .card{width:44px;height:60px;font-size:17px;border-radius:7px}
+.hand-slot.pickable{cursor:pointer}
+.hand-slot.pickable .card{outline:2px solid transparent;transition:outline-color .15s,transform .15s}
+.hand-slot.pickable:hover .card{outline-color:#dbb977;transform:translateY(-3px)}
+.hand-slot.is-selected .card{outline:3px solid #dbb977}
+/* drawn-card preview banner (non-modal so the hand stays tappable) */
+#draw-preview{display:flex;flex-direction:column;align-items:center;gap:6px;margin:4px auto 10px;padding:10px;border:1px dashed #dbb977;border-radius:14px;background:#2a1b43;max-width:420px}
+.draw-preview-row{display:flex;align-items:center;gap:14px}
+.card.large{width:84px;height:116px;font-size:34px}
+/* failed-cut public reveal */
+#cut-reveal{position:absolute;left:50%;top:16%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:4px;z-index:6;animation:dutch-pulse 1s}
+#cut-reveal em{font-style:normal;font-size:11px;color:#ffd0d0;background:#3a1d2a;padding:2px 8px;border-radius:10px}
+@keyframes dutch-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+@media(max-width:560px){.opponent{width:116px}.opp-slot .card{width:34px;height:48px;font-size:14px}.card.large{width:70px;height:98px;font-size:28px}}
+
+/* draw sits at the leftmost slot; highlight it and prevent page-level overflow from bigger seats */
+.hand-slot.is-drawn .card{outline:3px solid #7ad7a0;box-shadow:0 0 14px #7ad7a080}
+main{overflow-x:hidden}
+
+/* Stable hover: glow only, never movement (a moving element under the cursor flickers :hover) */
+.hand-slot:hover:not(:disabled){transform:none}
+.hand-slot .card{transition:outline-color .12s,box-shadow .12s}
+.hand-slot.pickable{cursor:pointer}
+.hand-slot.pickable:hover .card{transform:none;outline:2px solid #dbb977;box-shadow:0 0 12px #dbb97766}
+.hand-slot.is-selected .card{outline:3px solid #dbb977;box-shadow:0 0 12px #dbb97799}
+
+/* the just-drawn card sits in-hand (face shown ~3s) with a glowing NEW badge */
+.hand-slot.is-drawn .card{outline:3px solid #7ad7a0;box-shadow:0 0 16px #7ad7a0aa;animation:drawn-pulse 1s ease-in-out infinite}
+.drawn-badge{position:absolute;top:-7px;left:50%;transform:translateX(-50%);font-size:9px;font-style:normal;font-weight:700;letter-spacing:.06em;color:#0b2b1a;background:#7ad7a0;border-radius:8px;padding:1px 6px;box-shadow:0 2px 6px #0006}
+@keyframes drawn-pulse{0%,100%{box-shadow:0 0 16px #7ad7a0aa}50%{box-shadow:0 0 6px #7ad7a055}}
+
+/* ===== follow-up UX tuning ===== */
+/* hands stay on a single row (self + opponents) */
+.hand{flex-wrap:nowrap;overflow-x:auto;overflow-y:visible;justify-content:center;gap:8px;padding:6px 110px 6px 6px;scrollbar-width:thin}
+.opp-hand{flex-wrap:nowrap}
+.opponent{width:auto;max-width:210px}
+.opp-slot .card{width:40px;height:55px;font-size:16px}
+/* clearer reveal-count buttons */
+.pick-row{gap:10px}
+button.pick{min-width:62px;padding:10px 14px;font-weight:800;font-size:15px;border-radius:12px}
+/* DUTCH! circular button, anchored at the right of the hand */
+.hand-zone{position:relative}
+.dutch-fab{position:absolute;right:8px;bottom:10px;width:84px;height:84px;border-radius:50%;background:radial-gradient(circle at 32% 28%,#ffe3a1,#d4873b 72%);color:#2b1406;font-weight:800;font-size:16px;letter-spacing:.02em;border:3px solid #fff3d6;box-shadow:0 6px 20px #0006,0 0 0 4px #d4873b33;cursor:pointer;z-index:6;animation:dutch-glow 1.5s ease-in-out infinite}
+.dutch-fab:disabled{filter:grayscale(.6) brightness(.82);opacity:.5;animation:none;cursor:default;box-shadow:0 3px 10px #0004}
+@keyframes dutch-glow{0%,100%{box-shadow:0 6px 20px #0006,0 0 0 4px #d4873b33}50%{box-shadow:0 8px 28px #ffcf7a99,0 0 0 8px #ffcf7a33}}
+@media(max-width:560px){.dutch-fab{width:62px;height:62px;font-size:12px;right:4px;bottom:6px}.hand{padding-right:80px}.opp-slot .card{width:32px;height:45px}}

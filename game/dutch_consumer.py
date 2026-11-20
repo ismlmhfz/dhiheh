@@ -69,7 +69,7 @@ class DutchConsumer(AsyncJsonWebsocketConsumer):
                 message=await database_sync_to_async(service.chat_post)(self.code,self.who,data.get('text'),data.get('command'))
                 await self.send_json({'type':'chat.sent','command':data['command']})
                 await self.channel_layer.group_send(self.group,{'type':'dutch_chat','message':message});return
-            allowed={'ready','start','initial_peek','draw','take_discard','swap_drawn','cut','jack_peek','call','next_round','rematch','leave','delete','resync'}
+            allowed={'ready','start','choose_reveal','initial_peek','draw','take_discard','swap_drawn','discard_drawn','cut','jack_peek','queen_swap','king_lock','power_skip','call','next_round','rematch','leave','delete','resync'}
             if not action.startswith('dutch.') or action[6:] not in allowed:raise ValueError('Unknown Dutch action.')
             result=await database_sync_to_async(service.mutate)(self.code,self.who,action[6:],data)
             await self.send_json({'type':'dutch.ack','command':data.get('command'),'state':result})
