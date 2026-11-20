@@ -392,11 +392,12 @@ def do_cut(s, seat, data, now, rng):
         if not s['hands'][seat]: finish(s, 'empty_cut', seat); return
         begin_turn(s, seat, now); open_cut(s) if s['rules']['cut_on_cut_card'] else s.update(cut_window=None)
         return
-    # failed cut: card stays, public 2s reveal, one unseen penalty card
+    # failed cut: card stays in its slot, public 2s reveal, one unseen penalty card from the deck
     s['cut_reveal'] = {'seat': seat, 'slot': entry['slot'], 'face': copy.deepcopy(s['cards'][entry['card']]), 'until': now + s['rules']['failed_cut_reveal_seconds']}
+    penalty = None
     if s['draw_pile'] or (s['rules']['empty_draw_pile'] == 'reshuffle' and len(s['discard_pile']) > 1):
-        s['hands'][seat].append({'slot': token(rng), 'card': draw_card(s, rng), 'locked': False})
-    event(s, 'cut.penalty', seat)
+        penalty = token(rng); s['hands'][seat].append({'slot': penalty, 'card': draw_card(s, rng), 'locked': False})
+    event(s, 'cut.penalty', seat, slot=entry['slot'], penalty=penalty)
     if s['rules']['failed_cutter_takes_next_turn']: begin_turn(s, seat, now)
 
 

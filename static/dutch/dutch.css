@@ -66,3 +66,39 @@ button.pick{min-width:62px;padding:10px 14px;font-weight:800;font-size:15px;bord
 .dutch-fab:disabled{filter:grayscale(.6) brightness(.82);opacity:.5;animation:none;cursor:default;box-shadow:0 3px 10px #0004}
 @keyframes dutch-glow{0%,100%{box-shadow:0 6px 20px #0006,0 0 0 4px #d4873b33}50%{box-shadow:0 8px 28px #ffcf7a99,0 0 0 8px #ffcf7a33}}
 @media(max-width:560px){.dutch-fab{width:62px;height:62px;font-size:12px;right:4px;bottom:6px}.hand{padding-right:80px}.opp-slot .card{width:32px;height:45px}}
+
+/* move caption: make the status line a readable, centered banner */
+#notice{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);max-width:92vw;margin:0;padding:9px 16px;background:#1c1030ee;color:#ffe9c2;border:1px solid #d4b27255;border-radius:20px;font-weight:600;font-size:14px;text-align:center;box-shadow:0 6px 20px #0007;z-index:20;pointer-events:none}
+#notice:empty{display:none}
+
+/* ===== phone layout: reflow the elliptical table into stacked strips ===== */
+@media(max-width:640px){
+ main{padding-left:8px;padding-right:8px}
+ .room-heading h1{font-size:22px}
+ .room-tools button{font-size:11px;padding:7px 9px}
+ .round-line{flex-wrap:wrap;gap:6px}
+ .round-line .small{padding:6px 9px}
+ /* table becomes a simple column: opponents strip on top, piles below */
+ .dutch-table{height:auto;min-height:0;width:100%;margin:12px auto;padding:10px;border-width:4px;border-radius:18px;display:flex;flex-direction:column;gap:12px}
+ .dutch-table:before{display:none}
+ .table-watermark{display:none}
+ #opponents{position:static;display:flex;gap:8px;overflow-x:auto;overflow-y:visible;padding:4px 2px 8px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+ .opponent{position:static!important;transform:none!important;inset:auto!important;left:auto!important;top:auto!important;width:auto!important;min-width:94px;flex:0 0 auto;background:#2a1b3e;border:1px solid var(--line);border-radius:12px;padding:7px}
+ .opp-slot .card{width:30px;height:42px;font-size:12px}
+ .piles{position:static;inset:auto;gap:22px;justify-content:center;padding:2px}
+ #cut-reveal{top:auto;bottom:70px}
+ /* own hand + Dutch fab */
+ .hand-slot .card{width:52px;height:72px;font-size:21px}
+ .hand{padding:6px 70px 6px 6px}
+ /* move caption to the top so it never hides behind the hand/fab */
+ #notice{top:64px;bottom:auto}
+}
+@media(max-width:380px){
+ .hand-slot .card{width:46px;height:64px;font-size:18px}
+ .opp-slot .card{width:26px;height:37px}
+ .dutch-fab{width:56px;height:56px;font-size:11px}
+ .hand{padding-right:64px}
+}
+
+/* keep DUTCH! centered inside the circle (no overflow) */
+.dutch-fab{display:inline-flex;align-items:center;justify-content:center;text-align:center;line-height:1;padding:0;white-space:nowrap;overflow:hidden;font-size:15px}
